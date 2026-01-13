@@ -25,6 +25,27 @@ pip install -e .
 # 3. Restart Cursor and start chatting!
 ```
 
+## Project Structure
+
+Projects are created in `~/research-projects/` (separate from MCP code):
+
+```
+~/research-projects/
+└── my_research/
+    ├── context/           # Extracted paper contexts
+    ├── ideas/             # Generated and approved ideas
+    ├── experiments/
+    │   ├── logs/          # Experiment run logs
+    │   └── metrics.db     # Tracked metrics (SQLite)
+    ├── figures/           # Generated visualizations
+    ├── papers/
+    │   ├── drafts/
+    │   └── final/
+    ├── data/              # Datasets
+    ├── .git/              # Auto-initialized
+    └── project.json
+```
+
 ## Workflow Overview
 
 ```
@@ -35,9 +56,9 @@ pip install -e .
 │  1. CONTEXT         2. IDEAS           3. APPROVAL        4. SETUP          │
 │  ─────────────      ─────────────      ─────────────      ─────────────     │
 │  fetch_hf_trending  generate_ideas     USER TYPES:        create_env        │
-│  search_papers      (ranked by         APPROVE <id>       install_deps      │
-│  extract_context    novelty)           CODE <code>        setup_datasets    │
-│                                         ▲                                    │
+│  search_papers      submit_idea        APPROVE <id>       install_deps      │
+│  set_target_metrics (ranked by         CODE <code>        setup_datasets    │
+│                      novelty)           ▲                                    │
 │                                         │ BLOCKED                            │
 │                                         │ until user                         │
 │                                         │ approves                           │
@@ -45,13 +66,24 @@ pip install -e .
 │  5. EXPERIMENTS     6. ANALYSIS        7. WRITING         8. FORMAT         │
 │  ─────────────      ─────────────      ─────────────      ─────────────     │
 │  run_experiment     compare_baselines  format_table       cast_to_format    │
-│  run_ablation       check_significance get_citations      compile_paper     │
-│  collect_metrics    plot_comparison    create_skeleton    generate_poster   │
+│  log_experiment     check_significance check_completeness create_github_repo│
+│  collect_metrics    plot_comparison    expand_paper       compile_paper     │
+│                     get_exp_history    create_skeleton    finalize_github   │
 │                                                                              │
+│                         ┌──────────────────────┐                            │
+│                         │ EXPANSION LOOP       │                            │
+│                         │ if paper too short   │                            │
+│                         │ → more experiments   │                            │
+│                         │ → more figures       │                            │
+│                         └──────────────────────┘                            │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key Principle**: The workflow enforces human oversight. Ideas require explicit approval with a confirmation code before experiments can run.
+**Key Principles**:
+- Human oversight: Ideas require explicit approval with confirmation codes
+- Target-driven: Paper length/figures compared against reference papers
+- Auto-tracking: Experiments logged to SQLite with git auto-commits
+- GitHub integration: Create repo and add link to paper automatically
 
 ## Step-by-Step Usage
 
@@ -64,13 +96,30 @@ AI calls: create_project(name="efficient_attention", description="...")
 AI calls: create_workflow(project_id="efficient_attention")
 ```
 
-### Step 2: Gather Papers
+Projects are created in `~/research-projects/efficient_attention/` with full directory structure.
+
+### Step 2: Gather Papers & Set Targets
 
 ```
 You: "Find papers on linear attention transformers"
 
 AI calls: fetch_hf_trending(topic="linear attention transformers", max_results=10)
 AI calls: search_papers(query="efficient attention mechanisms", max_results=10)
+```
+
+**New:** Set target metrics from reference papers:
+```
+You: "Use these papers as reference for paper length"
+
+AI calls: set_target_metrics_from_papers(arxiv_ids=["2312.xxxxx", "2401.xxxxx"])
+
+Response: {
+  "target_metrics": {
+    "word_count": 5200,
+    "figure_count": 7,
+    "table_count": 3
+  }
+}
 ```
 
 ### Step 3: Generate Ideas
@@ -81,22 +130,16 @@ You: "Generate research ideas from these papers"
 AI calls: generate_ideas(paper_ids=[...], count=3, focus="efficiency")
 ```
 
-The AI will receive a response like:
+The AI receives paper context and generates ideas creatively, then submits each:
 
-```json
-{
-  "status": "BLOCKED_AWAITING_USER_APPROVAL",
-  "ranked_ideas": [
-    {"idea_id": "idea_abc123", "title": "...", "novelty_score": 0.85},
-    {"idea_id": "idea_def456", "title": "...", "novelty_score": 0.72}
-  ],
-  "user_instructions": {
-    "approval_commands": [
-      {"idea_id": "idea_abc123", "approval_command": "APPROVE idea_abc123 CODE 7382"},
-      {"idea_id": "idea_def456", "approval_command": "APPROVE idea_def456 CODE 4519"}
-    ]
-  },
-  "ai_instruction": "STOP HERE. Do NOT call approve_idea. Wait for user."
+```
+AI calls: submit_idea(title="...", description="...", motivation="...")
+
+Response: {
+  "idea_id": "idea_abc123",
+  "novelty_score": 0.85,
+  "status": "AWAITING_USER_APPROVAL",
+  "approval_command": "APPROVE idea_abc123 CODE 7382"
 }
 ```
 
@@ -136,10 +179,14 @@ AI calls: install_dependencies(env_name="exp_env", requirements=["torch", "numpy
 AI calls: define_hypotheses(idea_id="idea_abc123")
 ```
 
+**New:** Experiments are auto-tracked and logged:
 ```
 You: "Run the experiments"
 
 AI calls: run_experiment(script="train.py", name="main_run")
+# Auto-logs to experiments/metrics.db and auto-commits to git
+
+AI calls: log_experiment(project_dir="...", name="main_run", config={...}, metrics={...})
 AI calls: collect_metrics(experiments=["main_run"])
 ```
 
@@ -148,19 +195,52 @@ AI calls: collect_metrics(experiments=["main_run"])
 ```
 You: "Analyze results and create visualizations"
 
+AI calls: get_experiment_history(project_dir="...")  # Get all tracked runs
 AI calls: compare_to_baselines(method="ours", baselines=["baseline1", "baseline2"], results={...})
 AI calls: plot_comparison_bar(results={...}, metric="accuracy")
 AI calls: plot_training_curves(experiments=["main_run"], metrics=["loss"])
 AI calls: check_significance(method1="ours", method2="baseline", results={...})
 ```
 
-### Step 8: Write and Format Paper
+### Step 8: Write Paper & Check Completeness
 
+**New:** Check paper against target metrics from reference papers:
 ```
 You: "Write the paper for NeurIPS"
 
 AI calls: get_citations_for_topic(topic="attention mechanisms")
 AI calls: format_results_table(results={...})
+AI calls: check_paper_completeness(paper_content={...}, target_word_count=5200)
+
+Response: {
+  "status": "NEEDS_EXPANSION",
+  "current": {"words": 3200, "figures": 4},
+  "target": {"words": 5200, "figures": 7},
+  "suggestions": ["Add 3 more figures", "Need ~2000 more words"]
+}
+```
+
+If paper is too short, run more experiments:
+```
+AI calls: expand_paper()  # Get suggestions for experiments to add
+AI calls: run_ablation(script="train.py", ablation_params={"learning_rate": [0.001, 0.01]})
+```
+
+### Step 9: Format & Publish to GitHub
+
+**New:** Create GitHub repo and add link to paper:
+```
+You: "Format for NeurIPS and publish to GitHub"
+
+AI calls: create_github_repo(name="efficient-attention", private=True)
+
+Response: {
+  "repo_url": "https://github.com/user/efficient-attention"
+}
+
+AI calls: finalize_paper_with_github(latex_file="paper.tex")
+# Adds \footnote{Code: \url{https://github.com/...}} to paper
+
 AI calls: cast_to_format(conference="neurips", paper_content={...})
 AI calls: compile_paper(tex_file="output/paper_neurips.tex")
 ```
@@ -173,7 +253,9 @@ The system prevents skipping steps:
 |---------------|------------|------------|
 | `run_experiment` | Approved idea | `BLOCKED: Must approve idea first` |
 | `cast_to_format` | Generated figures | `BLOCKED: Generate figures first` |
+| `cast_to_format` | GitHub linked | Workflow suggests `create_github_repo` first |
 | `approve_idea` | Confirmation code | `ERROR: Code required` |
+| `check_paper_completeness` | Target metrics | Uses default (5000 words, 6 figures) |
 
 ### Workflow Orchestrator
 
@@ -205,7 +287,7 @@ Ideas require a **confirmation code** that only you can see:
 
 This prevents the AI from auto-approving low-quality ideas.
 
-## Complete Tool Reference (70 tools)
+## Complete Tool Reference (80 tools)
 
 ### Paper Aggregation (6 tools)
 
@@ -229,11 +311,19 @@ This prevents the AI from auto-approving low-quality ideas.
 | `get_next_action` | **Get next required step** | `get_next_action()` |
 | `get_workflow_checklist` | Full workflow status | `get_workflow_checklist()` |
 
-### Idea Generation (7 tools)
+### Paper Metrics (2 tools)
 
 | Tool | Description | Example |
 |------|-------------|---------|
-| `generate_ideas` | Generate ranked ideas | `generate_ideas(paper_ids=[...], count=3)` |
+| `extract_paper_metrics` | Get word/figure counts from paper | `extract_paper_metrics(arxiv_id="2312.xxxxx")` |
+| `set_target_metrics_from_papers` | Average metrics as targets | `set_target_metrics_from_papers(arxiv_ids=[...])` |
+
+### Idea Generation (8 tools)
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `generate_ideas` | Get paper context for ideas | `generate_ideas(paper_ids=[...], count=3)` |
+| `submit_idea` | Submit a generated idea | `submit_idea(title="...", description="...", motivation="...")` |
 | `approve_idea` | **Requires confirmation code** | `approve_idea(idea_id="...", confirmation_code="1234")` |
 | `reject_idea` | Reject with feedback | `reject_idea(idea_id="...", reason="...")` |
 | `list_ideas` | List ideas by status | `list_ideas(status="approved")` |
@@ -262,6 +352,13 @@ This prevents the AI from auto-approving low-quality ideas.
 | `monitor_training` | Monitor progress | `monitor_training(experiment_name="run1")` |
 | `save_checkpoint` | Save checkpoint | `save_checkpoint(experiment_name="run1")` |
 | `resume_experiment` | Resume from checkpoint | `resume_experiment(experiment_name="run1", checkpoint="...")` |
+
+### Experiment Tracking (2 tools)
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `log_experiment` | Log run to SQLite + JSON | `log_experiment(project_dir="...", name="run1", config={...}, metrics={...})` |
+| `get_experiment_history` | Get all tracked runs | `get_experiment_history(project_dir="...")` |
 
 ### Data Collection (6 tools)
 
@@ -297,7 +394,7 @@ This prevents the AI from auto-approving low-quality ideas.
 | `compare_to_baselines` | **Required for papers** | `compare_to_baselines(method="ours", baselines=[...], results={...})` |
 | `generate_results_summary` | Summary report | `generate_results_summary(experiments=[...])` |
 
-### Paper Writing (11 tools)
+### Paper Writing (13 tools)
 
 | Tool | Description | Example |
 |------|-------------|---------|
@@ -312,8 +409,10 @@ This prevents the AI from auto-approving low-quality ideas.
 | `get_paper_context` | Get writing context | `get_paper_context(paper_ids=[...])` |
 | `validate_latex` | Validate syntax | `validate_latex(latex_content="...")` |
 | `save_to_file` | Save content | `save_to_file(content="...", filename="...")` |
+| `check_paper_completeness` | **Compare to target metrics** | `check_paper_completeness(paper_content={...})` |
+| `expand_paper` | Get expansion suggestions | `expand_paper()` |
 
-### Conference Formatting (6 tools)
+### Conference Formatting (8 tools)
 
 | Tool | Description | Example |
 |------|-------------|---------|
@@ -323,6 +422,8 @@ This prevents the AI from auto-approving low-quality ideas.
 | `generate_poster` | Generate poster | `generate_poster(conference="neurips", paper_content={...})` |
 | `generate_supplementary` | Generate supplementary | `generate_supplementary(include_code=true)` |
 | `compile_paper` | Compile to PDF | `compile_paper(tex_file="paper.tex")` |
+| `create_github_repo` | **Create GitHub repo** | `create_github_repo(name="my-research", private=True)` |
+| `finalize_paper_with_github` | Add GitHub link to paper | `finalize_paper_with_github(latex_file="paper.tex")` |
 
 ## Supported Conferences
 
@@ -367,12 +468,54 @@ sudo tlmgr install <package_name>
 ### AI keeps trying to auto-approve ideas
 The confirmation code system should prevent this. If it happens, the `approve_idea` call will fail without the correct code.
 
+## Key Features
+
+### Target-Driven Paper Length
+
+Reference papers are analyzed to set word/figure targets:
+
+```
+AI calls: set_target_metrics_from_papers(arxiv_ids=["2312.xxxxx", "2401.xxxxx"])
+# Averages: 5200 words, 7 figures, 3 tables
+
+AI calls: check_paper_completeness(paper_content={...})
+# Returns: NEEDS_EXPANSION if paper is too short
+```
+
+### Experiment Tracking
+
+All experiments logged to SQLite with auto-commit to git:
+
+```python
+# Stored in ~/research-projects/<project>/experiments/metrics.db
+# JSON logs in experiments/logs/<run_id>/
+# Auto-commits after each run
+```
+
+### Expansion Loop
+
+If paper is too short compared to targets, the workflow suggests:
+- More experiments to run
+- Additional figures to generate
+- Analysis sections to expand
+
+### GitHub Integration
+
+```
+AI calls: create_github_repo(name="my-research", private=True)
+AI calls: finalize_paper_with_github(latex_file="paper.tex")
+# Adds: \footnote{Code: \url{https://github.com/user/my-research}}
+```
+
 ## Design Philosophy
 
 1. **Human approval required**: Ideas need explicit approval with confirmation codes
 2. **Workflow enforcement**: Can't skip steps (no experiments without approved idea)
-3. **Tools, not content**: MCP provides utilities; LLM generates actual content
-4. **Project isolation**: Each project has its own directory structure
+3. **Target-driven writing**: Paper length compared against reference papers
+4. **Auto-tracking**: Experiments logged to SQLite + git auto-commits
+5. **GitHub integration**: Code repo linked in paper automatically
+6. **Tools, not content**: MCP provides utilities; LLM generates actual content
+7. **Project isolation**: Each project in `~/research-projects/<name>/`
 
 ## License
 
