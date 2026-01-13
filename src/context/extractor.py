@@ -11,6 +11,87 @@ import aiohttp
 
 
 @dataclass
+class PaperMetrics:
+    """Key metrics from a paper for length targeting."""
+    word_count: int
+    figure_count: int
+    table_count: int
+    citation_count: int
+    section_lengths: dict  # section_name -> word_count
+    abstract_length: int
+    page_count: int
+    
+    def to_dict(self) -> dict:
+        return {
+            "word_count": self.word_count,
+            "figure_count": self.figure_count,
+            "table_count": self.table_count,
+            "citation_count": self.citation_count,
+            "section_lengths": self.section_lengths,
+            "abstract_length": self.abstract_length,
+            "page_count": self.page_count,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "PaperMetrics":
+        return cls(
+            word_count=data.get("word_count", 5000),
+            figure_count=data.get("figure_count", 6),
+            table_count=data.get("table_count", 3),
+            citation_count=data.get("citation_count", 40),
+            section_lengths=data.get("section_lengths", {}),
+            abstract_length=data.get("abstract_length", 200),
+            page_count=data.get("page_count", 9),
+        )
+    
+    @classmethod
+    def average(cls, metrics_list: list["PaperMetrics"]) -> "PaperMetrics":
+        """Compute average metrics from multiple papers."""
+        if not metrics_list:
+            return cls.default()
+        
+        n = len(metrics_list)
+        
+        all_sections = set()
+        for m in metrics_list:
+            all_sections.update(m.section_lengths.keys())
+        
+        avg_sections = {}
+        for section in all_sections:
+            values = [m.section_lengths.get(section, 0) for m in metrics_list]
+            avg_sections[section] = sum(values) // n
+        
+        return cls(
+            word_count=sum(m.word_count for m in metrics_list) // n,
+            figure_count=sum(m.figure_count for m in metrics_list) // n,
+            table_count=sum(m.table_count for m in metrics_list) // n,
+            citation_count=sum(m.citation_count for m in metrics_list) // n,
+            section_lengths=avg_sections,
+            abstract_length=sum(m.abstract_length for m in metrics_list) // n,
+            page_count=sum(m.page_count for m in metrics_list) // n,
+        )
+    
+    @classmethod
+    def default(cls) -> "PaperMetrics":
+        """Default metrics for a typical ML conference paper."""
+        return cls(
+            word_count=5000,
+            figure_count=6,
+            table_count=3,
+            citation_count=40,
+            section_lengths={
+                "introduction": 800,
+                "related_work": 600,
+                "method": 1200,
+                "experiments": 1500,
+                "conclusion": 400,
+            },
+            abstract_length=200,
+            page_count=9,
+        )
+
+
+@dataclass
 class SectionInfo:
     """Information about a paper section."""
     name: str
@@ -399,3 +480,61 @@ async def extract_paper_context(arxiv_id: str) -> Optional[dict]:
         return structure.to_dict()
     
     return None
+
+
+async def extract_paper_metrics(arxiv_id: str) -> PaperMetrics:
+    """Extract structural metrics from a paper for length targeting.
+    
+    Args:
+        arxiv_id: The arXiv ID (e.g., "2502.14678")
+    
+    Returns:
+        PaperMetrics with word counts, figure counts, etc.
+    """
+    extractor = PaperExtractor()
+    structure = await extractor.extract_from_arxiv_html(arxiv_id)
+    
+    if not structure:
+        return PaperMetrics.default()
+    
+    figure_count = len([f for f in structure.figures if f.fig_type == "figure"])
+    table_count = len([f for f in structure.figures if f.fig_type == "table"])
+    
+    section_lengths = {}
+    for section in structure.sections:
+        key = section.name.lower().replace(" ", "_")
+        section_lengths[key] = section.word_count
+    
+    return PaperMetrics(
+        word_count=structure.total_word_count,
+        figure_count=figure_count,
+        table_count=table_count,
+        citation_count=structure.citation_pattern.total_citations,
+        section_lengths=section_lengths,
+        abstract_length=structure.abstract_word_count,
+        page_count=structure.total_pages,
+    )
+
+
+async def extract_metrics_from_papers(arxiv_ids: list[str]) -> PaperMetrics:
+    """Extract and average metrics from multiple papers.
+    
+    Args:
+        arxiv_ids: List of arXiv IDs
+    
+    Returns:
+        Averaged PaperMetrics to use as target
+    """
+    metrics_list = []
+    
+    for arxiv_id in arxiv_ids:
+        try:
+            metrics = await extract_paper_metrics(arxiv_id)
+            metrics_list.append(metrics)
+        except Exception:
+            continue
+    
+    if not metrics_list:
+        return PaperMetrics.default()
+    
+    return PaperMetrics.average(metrics_list)

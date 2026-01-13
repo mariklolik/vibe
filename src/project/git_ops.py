@@ -1,5 +1,6 @@
 """Git operations for experiment tracking and versioning."""
 
+import asyncio
 import json
 import subprocess
 from datetime import datetime
@@ -178,6 +179,129 @@ class GitOps:
             return result.stdout
         except subprocess.CalledProcessError:
             return ""
+    
+    # Async methods for use with MCP tools
+    
+    async def commit(self, message: str) -> Optional[str]:
+        """Async commit with the given message."""
+        return await asyncio.to_thread(self._sync_commit, message)
+    
+    def _sync_commit(self, message: str) -> Optional[str]:
+        """Sync version of commit."""
+        try:
+            status = self._run_git("status", "--porcelain", check=False)
+            if not status.stdout.strip():
+                return None
+            
+            self._run_git("add", ".")
+            self._run_git("commit", "-m", message)
+            
+            result = self._run_git("rev-parse", "HEAD")
+            return result.stdout.strip()[:8]
+        except subprocess.CalledProcessError:
+            return None
+    
+    async def push(self, remote: str = "origin", branch: Optional[str] = None) -> bool:
+        """Push commits to remote."""
+        return await asyncio.to_thread(self._sync_push, remote, branch)
+    
+    def _sync_push(self, remote: str, branch: Optional[str]) -> bool:
+        """Sync version of push."""
+        try:
+            if branch:
+                self._run_git("push", remote, branch)
+            else:
+                self._run_git("push", remote)
+            return True
+        except subprocess.CalledProcessError:
+            return False
+    
+    async def auto_commit_stage(self, stage: str) -> Optional[str]:
+        """Commit all changes with a stage message and push."""
+        commit_hash = await self.commit(f"Stage: {stage}")
+        if commit_hash:
+            await self.push()
+        return commit_hash
+    
+    async def create_github_repo(
+        self,
+        name: str,
+        private: bool = True,
+        description: str = "",
+    ) -> Optional[str]:
+        """Create a GitHub repo using gh CLI."""
+        return await asyncio.to_thread(
+            self._sync_create_github_repo, name, private, description
+        )
+    
+    def _sync_create_github_repo(
+        self,
+        name: str,
+        private: bool,
+        description: str,
+    ) -> Optional[str]:
+        """Sync version of create_github_repo."""
+        try:
+            if not self.is_initialized():
+                self.init()
+            
+            self._sync_commit("Initial commit")
+            
+            cmd = ["gh", "repo", "create", name]
+            if private:
+                cmd.append("--private")
+            else:
+                cmd.append("--public")
+            
+            if description:
+                cmd.extend(["--description", description])
+            
+            cmd.extend(["--source", ".", "--push"])
+            
+            result = subprocess.run(
+                cmd,
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True,
+            )
+            
+            if result.returncode == 0:
+                return self.get_repo_url()
+            
+            return None
+        except Exception:
+            return None
+    
+    def get_repo_url(self) -> Optional[str]:
+        """Get the GitHub repo URL."""
+        try:
+            result = self._run_git("remote", "get-url", "origin", check=False)
+            url = result.stdout.strip()
+            
+            if url.startswith("git@github.com:"):
+                url = url.replace("git@github.com:", "https://github.com/")
+                url = url.replace(".git", "")
+            elif url.endswith(".git"):
+                url = url[:-4]
+            
+            return url if url else None
+        except subprocess.CalledProcessError:
+            return None
+    
+    async def set_remote(self, url: str, remote_name: str = "origin") -> bool:
+        """Set or update remote URL."""
+        return await asyncio.to_thread(self._sync_set_remote, url, remote_name)
+    
+    def _sync_set_remote(self, url: str, remote_name: str) -> bool:
+        """Sync version of set_remote."""
+        try:
+            try:
+                self._run_git("remote", "add", remote_name, url)
+            except subprocess.CalledProcessError:
+                self._run_git("remote", "set-url", remote_name, url)
+            return True
+        except subprocess.CalledProcessError:
+            return False
 
 
 def init_project_repo(project_path: Path) -> GitOps:

@@ -97,13 +97,17 @@ class Project:
         )
 
 
+DEFAULT_PROJECTS_DIR = Path.home() / "research-projects"
+
+
 class ProjectManager:
     """Manages research projects and their directory structures."""
     
-    def __init__(self, projects_root: Optional[str] = None, db_path: Optional[str] = None):
+    def __init__(self, projects_root: Optional[Path] = None, db_path: Optional[str] = None):
         if projects_root is None:
-            projects_root = Path.cwd() / "projects"
+            projects_root = DEFAULT_PROJECTS_DIR
         self.projects_root = Path(projects_root)
+        self.projects_root.mkdir(parents=True, exist_ok=True)
         
         if db_path is None:
             cache_dir = Path.home() / ".cache" / "research-mcp"

@@ -93,6 +93,8 @@ from src.tools.writing import (
     get_paper_context,
     validate_latex,
     save_to_file,
+    check_paper_completeness,
+    expand_paper,
 )
 
 # Formatting for conferences
@@ -103,6 +105,8 @@ from src.tools.formatting import (
     generate_poster,
     generate_supplementary,
     compile_paper,
+    create_github_repo,
+    finalize_paper_with_github,
 )
 
 # Context extraction
@@ -113,6 +117,19 @@ from src.tools.workflow_tools import (
     get_next_action,
     get_workflow_checklist,
     mark_step_complete,
+    set_target_metrics_from_papers,
+)
+
+# Experiment tracking
+from src.tools.tracking import (
+    log_experiment,
+    get_experiment_history,
+)
+
+# Paper metrics extraction
+from src.context.extractor import (
+    extract_paper_metrics,
+    extract_metrics_from_papers,
 )
 
 # Project management
@@ -282,6 +299,22 @@ TOOL_HANDLERS = {
     "generate_poster": generate_poster,
     "generate_supplementary": generate_supplementary,
     "compile_paper": compile_paper,
+    
+    # Paper completeness and expansion
+    "check_paper_completeness": check_paper_completeness,
+    "expand_paper": expand_paper,
+    
+    # GitHub integration
+    "create_github_repo": create_github_repo,
+    "finalize_paper_with_github": finalize_paper_with_github,
+    
+    # Experiment tracking
+    "log_experiment": log_experiment,
+    "get_experiment_history": get_experiment_history,
+    
+    # Paper metrics
+    "extract_paper_metrics": extract_paper_metrics,
+    "set_target_metrics_from_papers": set_target_metrics_from_papers,
 }
 
 TOOLS = [
@@ -1153,6 +1186,132 @@ TOOLS = [
                 "output_dir": {"type": "string", "description": "Optional output directory for PDF"},
             },
             "required": ["tex_file"],
+        },
+    ),
+    
+    # === PAPER COMPLETENESS ===
+    Tool(
+        name="check_paper_completeness",
+        description=(
+            "Check if paper meets target length/figure/table requirements. "
+            "Compare current paper against target metrics from reference papers. "
+            "Returns NEEDS_EXPANSION if paper is too short."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "paper_content": {"type": "object", "description": "Dict of {section: content}"},
+                "latex_file": {"type": "string", "description": "Path to LaTeX file to analyze"},
+                "target_word_count": {"type": "integer", "default": 5000},
+                "target_figure_count": {"type": "integer", "default": 6},
+                "target_table_count": {"type": "integer", "default": 3},
+            },
+        },
+    ),
+    Tool(
+        name="expand_paper",
+        description=(
+            "Get suggestions for expanding a paper that is too short. "
+            "Suggests additional experiments, figures, and analyses to add."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+    
+    # === GITHUB INTEGRATION ===
+    Tool(
+        name="create_github_repo",
+        description=(
+            "Create a GitHub repository for the current project using gh CLI. "
+            "Commits all files and pushes to GitHub."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Repository name (defaults to project name)"},
+                "private": {"type": "boolean", "default": True},
+                "description": {"type": "string", "default": ""},
+            },
+        },
+    ),
+    Tool(
+        name="finalize_paper_with_github",
+        description=(
+            "Add GitHub link to paper, compile to PDF, and commit. "
+            "Final step before submission."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "latex_file": {"type": "string", "description": "Path to LaTeX file"},
+                "repo_url": {"type": "string", "description": "GitHub URL (auto-fetched if not provided)"},
+            },
+            "required": ["latex_file"],
+        },
+    ),
+    
+    # === EXPERIMENT TRACKING ===
+    Tool(
+        name="log_experiment",
+        description=(
+            "Log a completed experiment with config and metrics. "
+            "Stores in SQLite and JSON for paper generation."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_dir": {"type": "string", "description": "Path to project directory"},
+                "name": {"type": "string", "description": "Experiment name"},
+                "config": {"type": "object", "description": "Experiment configuration"},
+                "metrics": {"type": "object", "description": "Results metrics"},
+            },
+            "required": ["project_dir", "name", "config", "metrics"],
+        },
+    ),
+    Tool(
+        name="get_experiment_history",
+        description=(
+            "Get all logged experiment runs for a project. "
+            "Returns summary and full run details."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_dir": {"type": "string", "description": "Path to project directory"},
+            },
+            "required": ["project_dir"],
+        },
+    ),
+    
+    # === PAPER METRICS ===
+    Tool(
+        name="extract_paper_metrics",
+        description=(
+            "Extract word count, figure count, table count from a paper. "
+            "Use to set targets for your paper."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "arxiv_id": {"type": "string", "description": "arXiv ID (e.g., '2502.14678')"},
+            },
+            "required": ["arxiv_id"],
+        },
+    ),
+    Tool(
+        name="set_target_metrics_from_papers",
+        description=(
+            "Extract metrics from multiple papers and set as targets. "
+            "Averages word count, figures, tables across papers."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "arxiv_ids": {"type": "array", "items": {"type": "string"}, "description": "List of arXiv IDs"},
+            },
+            "required": ["arxiv_ids"],
         },
     ),
 ]

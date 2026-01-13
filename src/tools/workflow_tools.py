@@ -1,11 +1,18 @@
 """Workflow orchestration tools - guide the agent through required steps."""
 
 import json
+from pathlib import Path
 from typing import Optional
 
 from src.db.workflow import workflow_db, WorkflowState
 from src.db.experiments_db import experiments_db
 from src.project.manager import project_manager
+
+
+# Minimum thresholds for paper completeness
+MIN_WORD_COUNT_RATIO = 0.85  # Paper must be 85% of target length
+MIN_FIGURE_COUNT = 3
+MIN_TABLE_COUNT = 1
 
 
 # Stage definitions with required completions and next actions
@@ -135,10 +142,37 @@ async def get_next_action() -> str:
         
         return await get_next_action()  # Recurse to get next stage info
     
+    # Check if in writing stage and paper completeness
+    if current_stage == "writing" and len(workflow.paper_sections) > 0:
+        completeness = await _check_paper_completeness_internal(workflow)
+        
+        if not completeness.get("sufficient", False):
+            return json.dumps({
+                "status": "NEEDS_EXPANSION",
+                "stage": current_stage,
+                "description": "Paper is too short compared to target metrics",
+                "completeness": completeness,
+                "next_action": {
+                    "tool": "expand_paper",
+                    "description": "Run more experiments or add more content to reach target length",
+                },
+                "suggestions": completeness.get("suggestions", []),
+                "paper_iteration": workflow.paper_iterations + 1,
+            }, indent=2)
+    
     # Current stage not complete - return required actions
     required_tools = stage_info.get("required_tools", [])
     completed_tools = _get_completed_tools(workflow, required_tools)
     missing_tools = [t for t in required_tools if t not in completed_tools]
+    
+    # Add target metrics info if available
+    target_info = {}
+    if workflow.target_metrics:
+        target_info = {
+            "target_words": workflow.target_metrics.get("word_count", 5000),
+            "target_figures": workflow.target_metrics.get("figure_count", 6),
+            "target_tables": workflow.target_metrics.get("table_count", 3),
+        }
     
     return json.dumps({
         "status": "IN_PROGRESS",
@@ -155,11 +189,15 @@ async def get_next_action() -> str:
         "workflow_summary": {
             "papers_gathered": len(workflow.gathered_papers),
             "contexts_extracted": len(workflow.extracted_contexts),
+            "target_metrics_set": workflow.target_metrics is not None,
             "ideas_generated": len(workflow.generated_ideas),
             "idea_approved": workflow.approved_idea_id is not None,
             "experiments_completed": len(workflow.completed_experiments),
+            "tracked_runs": len(workflow.experiment_runs),
             "figures_generated": len(workflow.figures_generated),
+            "github_linked": workflow.github_url is not None,
         },
+        "target_metrics": target_info if target_info else None,
     }, indent=2)
 
 
@@ -301,7 +339,88 @@ async def get_workflow_checklist() -> str:
         })
     
     return json.dumps({
-        "project": current_project,
+        "project": current_project_obj.project_id,
         "current_stage": workflow.stage,
+        "paper_iterations": workflow.paper_iterations,
+        "github_url": workflow.github_url,
+        "target_metrics": workflow.target_metrics,
         "checklist": checklist,
+    }, indent=2)
+
+
+async def _check_paper_completeness_internal(workflow: WorkflowState) -> dict:
+    """Internal check for paper completeness against target metrics."""
+    target_metrics = workflow.target_metrics or {}
+    target_words = target_metrics.get("word_count", 5000)
+    target_figures = target_metrics.get("figure_count", 6)
+    target_tables = target_metrics.get("table_count", 3)
+    
+    current_words = 0
+    for section_content in workflow.paper_sections.values():
+        if isinstance(section_content, str):
+            current_words += len(section_content.split())
+    
+    current_figures = len(workflow.figures_generated)
+    
+    word_ratio = current_words / max(1, target_words)
+    sufficient = word_ratio >= MIN_WORD_COUNT_RATIO and current_figures >= MIN_FIGURE_COUNT
+    
+    suggestions = []
+    if word_ratio < MIN_WORD_COUNT_RATIO:
+        words_needed = int(target_words * MIN_WORD_COUNT_RATIO) - current_words
+        suggestions.append(f"Add ~{words_needed} more words ({int((1 - word_ratio) * 100)}% short of target)")
+    
+    if current_figures < MIN_FIGURE_COUNT:
+        suggestions.append(f"Add {MIN_FIGURE_COUNT - current_figures} more figures")
+    
+    if len(workflow.completed_experiments) < 3:
+        suggestions.append("Run more experiments for additional results")
+    
+    return {
+        "sufficient": sufficient,
+        "current_words": current_words,
+        "target_words": target_words,
+        "word_ratio": round(word_ratio, 2),
+        "current_figures": current_figures,
+        "target_figures": target_figures,
+        "suggestions": suggestions,
+    }
+
+
+async def set_target_metrics_from_papers(arxiv_ids: list[str]) -> str:
+    """
+    Extract and set target metrics from reference papers.
+    
+    This calculates average word count, figures, tables from given papers
+    and sets them as targets for the current paper.
+    
+    Args:
+        arxiv_ids: List of arXiv IDs to extract metrics from
+    
+    Returns:
+        JSON with extracted and averaged metrics
+    """
+    from src.context.extractor import extract_metrics_from_papers
+    
+    current_project_obj = await project_manager.get_current_project()
+    if not current_project_obj:
+        return json.dumps({"error": "No active project"})
+    
+    workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
+    if not workflow:
+        return json.dumps({"error": "No workflow found"})
+    
+    metrics = await extract_metrics_from_papers(arxiv_ids)
+    
+    workflow.target_metrics = metrics.to_dict()
+    await workflow_db.save_workflow(workflow)
+    
+    return json.dumps({
+        "success": True,
+        "target_metrics": metrics.to_dict(),
+        "papers_analyzed": len(arxiv_ids),
+        "message": (
+            f"Target metrics set: {metrics.word_count} words, "
+            f"{metrics.figure_count} figures, {metrics.table_count} tables"
+        ),
     }, indent=2)

@@ -12,6 +12,8 @@ from typing import Optional
 from src.db.experiments_db import experiments_db, Experiment
 from src.db.workflow import workflow_db
 from src.project.manager import project_manager
+from src.project.git_ops import GitOps
+from src.tools.tracking import ExperimentTracker
 
 
 EXPERIMENTS_DIR = Path("./experiments")
@@ -126,6 +128,17 @@ async def run_experiment(
     stdout_log = log_dir / "stdout.log"
     stderr_log = log_dir / "stderr.log"
     
+    # Initialize tracker for auto-logging
+    current_project = await project_manager.get_current_project()
+    tracker = None
+    if current_project:
+        tracker = ExperimentTracker(current_project.root_path)
+        tracker_run = await tracker.start_run(
+            name=exp_name,
+            config={"script": script, "config": config, "gpu_ids": gpu_ids},
+            run_id=exp_id,
+        )
+    
     try:
         with open(stdout_log, "w") as stdout_f, open(stderr_log, "w") as stderr_f:
             process = subprocess.Popen(
@@ -136,6 +149,11 @@ async def run_experiment(
                 cwd=str(script_path.parent) if script_path.parent != Path(".") else None,
             )
         
+        # Auto-commit experiment start
+        if current_project:
+            git_ops = GitOps(current_project.root_path)
+            await git_ops.commit(f"Start experiment: {exp_name}")
+        
         return json.dumps({
             "success": True,
             "experiment_id": exp_id,
@@ -143,12 +161,16 @@ async def run_experiment(
             "pid": process.pid,
             "log_dir": str(log_dir),
             "status": "running",
+            "tracked": tracker is not None,
             "monitor_cmd": f"tail -f {stdout_log}",
         })
     except Exception as e:
         exp.status = "failed"
         exp.extra_data["error"] = str(e)
         await experiments_db.save_experiment(exp)
+        
+        if tracker:
+            await tracker.complete_run(exp_id, status="failed", notes=str(e))
         
         return json.dumps({
             "success": False,

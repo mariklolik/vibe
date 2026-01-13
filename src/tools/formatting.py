@@ -905,3 +905,157 @@ async def compile_paper(
         "pdf_file": str(pdf_path) if pdf_path.exists() else None,
         "compilation_logs": logs,
     }, indent=2)
+
+
+def add_github_link_to_latex(latex_content: str, repo_url: str) -> str:
+    """Add GitHub repo link to a LaTeX paper.
+    
+    Args:
+        latex_content: The full LaTeX content
+        repo_url: GitHub repository URL
+    
+    Returns:
+        Modified LaTeX content with GitHub link added
+    """
+    import re
+    
+    if not repo_url:
+        return latex_content
+    
+    if "\\usepackage{hyperref}" not in latex_content:
+        preamble_end = latex_content.find("\\begin{document}")
+        if preamble_end != -1:
+            latex_content = (
+                latex_content[:preamble_end] + 
+                "\\usepackage{hyperref}\n" + 
+                latex_content[preamble_end:]
+            )
+    
+    abstract_match = re.search(r'(\\begin\{abstract\})', latex_content)
+    if abstract_match:
+        footnote = f"\\\\footnote{{Code available at: \\\\url{{{repo_url}}}}}"
+        
+        title_match = re.search(r'(\\title\{[^}]+\})', latex_content)
+        if title_match:
+            old_title = title_match.group(1)
+            new_title = old_title[:-1] + footnote + "}"
+            latex_content = latex_content.replace(old_title, new_title, 1)
+    
+    return latex_content
+
+
+async def create_github_repo(
+    name: Optional[str] = None,
+    private: bool = True,
+    description: str = "",
+) -> str:
+    """Create a GitHub repository for the current project.
+    
+    Uses the gh CLI to create a repository, commit all files, and push.
+    
+    Args:
+        name: Repository name (defaults to project name)
+        private: Whether the repo should be private
+        description: Repository description
+    
+    Returns:
+        JSON with repo URL and status
+    """
+    from src.project.git_ops import GitOps
+    
+    current_project = await project_manager.get_current_project()
+    
+    if not current_project:
+        return json.dumps({
+            "success": False,
+            "error": "No active project",
+            "action": "Create a project first with create_project()",
+        })
+    
+    repo_name = name or current_project.name.replace(" ", "-").lower()
+    repo_desc = description or current_project.description
+    
+    git_ops = GitOps(current_project.root_path)
+    
+    repo_url = await git_ops.create_github_repo(
+        name=repo_name,
+        private=private,
+        description=repo_desc,
+    )
+    
+    if repo_url:
+        workflow = await workflow_db.get_project_workflow(current_project.project_id)
+        if workflow:
+            workflow["github_url"] = repo_url
+            await workflow_db.save_workflow(workflow)
+        
+        return json.dumps({
+            "success": True,
+            "repo_url": repo_url,
+            "repo_name": repo_name,
+            "private": private,
+            "message": f"Repository created and pushed to {repo_url}",
+            "paper_integration": (
+                "Add to your paper with: "
+                f"\\\\footnote{{Code: \\\\url{{{repo_url}}}}}"
+            ),
+        }, indent=2)
+    else:
+        return json.dumps({
+            "success": False,
+            "error": "Failed to create GitHub repository",
+            "troubleshooting": [
+                "Ensure gh CLI is installed: brew install gh",
+                "Authenticate with: gh auth login",
+                "Check if repo name already exists",
+            ],
+        }, indent=2)
+
+
+async def finalize_paper_with_github(
+    latex_file: str,
+    repo_url: Optional[str] = None,
+) -> str:
+    """Add GitHub link to paper and compile to PDF.
+    
+    Args:
+        latex_file: Path to the LaTeX file
+        repo_url: GitHub URL (fetched from project if not provided)
+    
+    Returns:
+        JSON with PDF path and repo URL
+    """
+    current_project = await project_manager.get_current_project()
+    
+    if not repo_url and current_project:
+        workflow = await workflow_db.get_project_workflow(current_project.project_id)
+        if workflow:
+            repo_url = workflow.get("github_url")
+    
+    latex_path = Path(latex_file)
+    if not latex_path.exists():
+        return json.dumps({
+            "success": False,
+            "error": f"LaTeX file not found: {latex_file}",
+        })
+    
+    latex_content = latex_path.read_text()
+    
+    if repo_url:
+        latex_content = add_github_link_to_latex(latex_content, repo_url)
+        latex_path.write_text(latex_content)
+    
+    compile_result = await compile_paper(str(latex_path))
+    compile_data = json.loads(compile_result)
+    
+    if current_project and compile_data.get("success"):
+        from src.project.git_ops import GitOps
+        git_ops = GitOps(current_project.root_path)
+        await git_ops.auto_commit_stage("paper_finalized")
+    
+    return json.dumps({
+        "success": compile_data.get("success", False),
+        "pdf_file": compile_data.get("pdf_file"),
+        "github_url": repo_url,
+        "message": "Paper finalized with GitHub link" if repo_url else "Paper compiled",
+    }, indent=2)

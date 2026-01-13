@@ -27,6 +27,9 @@ class WorkflowState:
     gathered_papers: list[str] = field(default_factory=list)
     extracted_contexts: list[str] = field(default_factory=list)
     
+    # Target metrics from reference papers
+    target_metrics: Optional[dict] = None  # PaperMetrics.to_dict() format
+    
     # Ideas
     generated_ideas: list[str] = field(default_factory=list)
     approved_idea_id: Optional[str] = None
@@ -36,11 +39,16 @@ class WorkflowState:
     experiment_configs: list[dict] = field(default_factory=list)
     completed_experiments: list[str] = field(default_factory=list)
     experiment_results: dict = field(default_factory=dict)
+    experiment_runs: list[str] = field(default_factory=list)  # Tracked run IDs
     
     # Writing
     paper_sections: dict = field(default_factory=dict)  # {section_name: content}
     figures_generated: list[str] = field(default_factory=list)
     target_conference: Optional[str] = None
+    paper_iterations: int = 0  # Number of paper expansion iterations
+    
+    # GitHub
+    github_url: Optional[str] = None
     
     # Metadata
     created_at: str = ""
@@ -57,15 +65,19 @@ class WorkflowState:
             "next_steps": self.next_steps,
             "gathered_papers": self.gathered_papers,
             "extracted_contexts": self.extracted_contexts,
+            "target_metrics": self.target_metrics,
             "generated_ideas": self.generated_ideas,
             "approved_idea_id": self.approved_idea_id,
             "hypotheses": self.hypotheses,
             "experiment_configs": self.experiment_configs,
             "completed_experiments": self.completed_experiments,
             "experiment_results": self.experiment_results,
+            "experiment_runs": self.experiment_runs,
             "paper_sections": self.paper_sections,
             "figures_generated": self.figures_generated,
             "target_conference": self.target_conference,
+            "paper_iterations": self.paper_iterations,
+            "github_url": self.github_url,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "last_action": self.last_action,
@@ -82,15 +94,19 @@ class WorkflowState:
             next_steps=data.get("next_steps", []),
             gathered_papers=data.get("gathered_papers", []),
             extracted_contexts=data.get("extracted_contexts", []),
+            target_metrics=data.get("target_metrics"),
             generated_ideas=data.get("generated_ideas", []),
             approved_idea_id=data.get("approved_idea_id"),
             hypotheses=data.get("hypotheses", []),
             experiment_configs=data.get("experiment_configs", []),
             completed_experiments=data.get("completed_experiments", []),
             experiment_results=data.get("experiment_results", {}),
+            experiment_runs=data.get("experiment_runs", []),
             paper_sections=data.get("paper_sections", {}),
             figures_generated=data.get("figures_generated", []),
             target_conference=data.get("target_conference"),
+            paper_iterations=data.get("paper_iterations", 0),
+            github_url=data.get("github_url"),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
             last_action=data.get("last_action"),
@@ -111,16 +127,26 @@ class WorkflowState:
         
         current_index = stages.index(self.stage) if self.stage in stages else 0
         
+        target_words = self.target_metrics.get("word_count", 5000) if self.target_metrics else 5000
+        target_figures = self.target_metrics.get("figure_count", 6) if self.target_metrics else 6
+        
         return {
             "current_stage": self.stage,
             "progress_percent": int((current_index + 1) / len(stages) * 100),
             "papers_gathered": len(self.gathered_papers),
             "contexts_extracted": len(self.extracted_contexts),
+            "target_metrics_set": self.target_metrics is not None,
             "ideas_generated": len(self.generated_ideas),
             "idea_approved": self.approved_idea_id is not None,
             "experiments_completed": len(self.completed_experiments),
+            "tracked_runs": len(self.experiment_runs),
             "sections_written": len(self.paper_sections),
             "figures_generated": len(self.figures_generated),
+            "target_figures": target_figures,
+            "target_words": target_words,
+            "paper_iterations": self.paper_iterations,
+            "github_linked": self.github_url is not None,
+            "github_url": self.github_url,
             "completed_steps": len(self.completed_steps),
             "next_steps": self.next_steps[:3],
         }
@@ -467,11 +493,33 @@ class WorkflowDB:
         # Suggest moving to next stage if enough context gathered
         if len(workflow.extracted_contexts) >= 3:
             workflow.next_steps = [
+                "Extract paper metrics using extract_paper_metrics to set targets",
                 "Generate research ideas using generate_ideas",
                 "Or gather more papers for additional context",
             ]
         
         await self.update_workflow(workflow, "context_extracted", {"context_id": context_id})
+    
+    async def set_target_metrics(self, workflow: WorkflowState, metrics: dict) -> None:
+        """Set target metrics from reference papers."""
+        workflow.target_metrics = metrics
+        await self.update_workflow(workflow, "target_metrics_set", metrics)
+    
+    async def add_experiment_run(self, workflow: WorkflowState, run_id: str) -> None:
+        """Track an experiment run."""
+        if run_id not in workflow.experiment_runs:
+            workflow.experiment_runs.append(run_id)
+        await self.save_workflow(workflow)
+    
+    async def increment_paper_iterations(self, workflow: WorkflowState) -> None:
+        """Track paper expansion iterations."""
+        workflow.paper_iterations += 1
+        await self.save_workflow(workflow)
+    
+    async def set_github_url(self, workflow: WorkflowState, url: str) -> None:
+        """Set the GitHub repository URL."""
+        workflow.github_url = url
+        await self.update_workflow(workflow, "github_linked", {"url": url})
     
     async def add_idea(self, workflow: WorkflowState, idea_id: str) -> None:
         """Add a generated idea to the workflow."""

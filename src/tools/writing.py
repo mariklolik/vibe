@@ -471,3 +471,204 @@ async def save_to_file(
         "path": str(file_path),
         "size": len(content),
     }, indent=2)
+
+
+def _count_words_in_latex(content: str) -> int:
+    """Count words in LaTeX content, excluding commands."""
+    import re
+    
+    text = re.sub(r'\\[a-zA-Z]+\{[^}]*\}', ' ', content)
+    text = re.sub(r'\\[a-zA-Z]+', ' ', text)
+    text = re.sub(r'\{|\}|\[|\]|\\', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    
+    words = [w for w in text.split() if len(w) > 1 and not w.isdigit()]
+    return len(words)
+
+
+def _count_figures_in_latex(content: str) -> int:
+    """Count figures in LaTeX content."""
+    import re
+    return len(re.findall(r'\\begin\{figure', content))
+
+
+def _count_tables_in_latex(content: str) -> int:
+    """Count tables in LaTeX content."""
+    import re
+    return len(re.findall(r'\\begin\{table', content))
+
+
+async def check_paper_completeness(
+    paper_content: Optional[dict] = None,
+    latex_file: Optional[str] = None,
+    target_word_count: int = 5000,
+    target_figure_count: int = 6,
+    target_table_count: int = 3,
+) -> str:
+    """Compare generated paper to target metrics.
+    
+    Args:
+        paper_content: Dict with paper sections {section_name: content}
+        latex_file: Path to a LaTeX file to analyze
+        target_word_count: Target word count (default 5000 for 9-page paper)
+        target_figure_count: Target number of figures
+        target_table_count: Target number of tables
+    
+    Returns:
+        JSON with completeness status and suggestions
+    """
+    current_words = 0
+    current_figures = 0
+    current_tables = 0
+    section_counts = {}
+    
+    if latex_file:
+        try:
+            latex_path = Path(latex_file)
+            if latex_path.exists():
+                content = latex_path.read_text()
+                current_words = _count_words_in_latex(content)
+                current_figures = _count_figures_in_latex(content)
+                current_tables = _count_tables_in_latex(content)
+        except Exception:
+            pass
+    
+    if paper_content:
+        for section, content in paper_content.items():
+            words = _count_words_in_latex(content) if isinstance(content, str) else 0
+            section_counts[section] = words
+            current_words += words
+            
+            if isinstance(content, str):
+                current_figures += _count_figures_in_latex(content)
+                current_tables += _count_tables_in_latex(content)
+    
+    word_gap = target_word_count - current_words
+    figure_gap = target_figure_count - current_figures
+    table_gap = target_table_count - current_tables
+    
+    sufficient = current_words >= target_word_count * 0.9
+    
+    gaps = {
+        "word_gap": word_gap,
+        "figure_gap": figure_gap,
+        "table_gap": table_gap,
+        "word_progress": round(current_words / target_word_count * 100, 1),
+        "figure_progress": round(current_figures / max(1, target_figure_count) * 100, 1),
+        "table_progress": round(current_tables / max(1, target_table_count) * 100, 1),
+    }
+    
+    suggestions = []
+    if word_gap > 500:
+        suggestions.append(f"Add ~{word_gap} more words to reach target")
+        
+        if section_counts:
+            smallest_sections = sorted(section_counts.items(), key=lambda x: x[1])[:3]
+            for section, count in smallest_sections:
+                if count < 500:
+                    suggestions.append(f"Expand '{section}' section (currently {count} words)")
+    
+    if figure_gap > 0:
+        suggestions.append(f"Add {figure_gap} more figures")
+        suggestions.append("Consider: training curves, comparison bars, ablation charts, architecture diagram")
+    
+    if table_gap > 0:
+        suggestions.append(f"Add {table_gap} more tables")
+        suggestions.append("Consider: main results table, ablation table, hyperparameters table")
+    
+    if not sufficient:
+        suggestions.append("Run more experiments to generate additional content")
+        suggestions.append("Add more ablation studies or analysis")
+    
+    status = "SUFFICIENT" if sufficient else "NEEDS_EXPANSION"
+    
+    return json.dumps({
+        "status": status,
+        "current": {
+            "words": current_words,
+            "figures": current_figures,
+            "tables": current_tables,
+            "sections": section_counts,
+        },
+        "target": {
+            "words": target_word_count,
+            "figures": target_figure_count,
+            "tables": target_table_count,
+        },
+        "gaps": gaps,
+        "sufficient": sufficient,
+        "suggestions": suggestions,
+    }, indent=2)
+
+
+async def expand_paper() -> str:
+    """Suggest and plan additional experiments to fill paper gaps.
+    
+    This tool analyzes what's missing from the paper and suggests
+    specific experiments, figures, or content to add.
+    
+    Returns:
+        JSON with expansion suggestions
+    """
+    from src.project.manager import project_manager
+    from src.tools.tracking import ExperimentTracker
+    
+    current_project = await project_manager.get_current_project()
+    
+    if not current_project:
+        return json.dumps({
+            "error": "No active project",
+            "action": "Create a project first with create_project()",
+        })
+    
+    tracker = ExperimentTracker(current_project.root_path)
+    summary = await tracker.get_summary()
+    
+    suggestions = {
+        "additional_experiments": [],
+        "additional_figures": [],
+        "additional_analyses": [],
+        "estimated_words_added": 0,
+    }
+    
+    if summary["total_runs"] < 3:
+        suggestions["additional_experiments"].extend([
+            "Run baseline comparisons",
+            "Run ablation study removing key components",
+            "Run experiments on additional datasets",
+        ])
+        suggestions["estimated_words_added"] += 800
+    
+    existing_figures = list(current_project.figures_dir.glob("*.pdf")) + \
+                       list(current_project.figures_dir.glob("*.png"))
+    
+    if len(existing_figures) < 4:
+        suggestions["additional_figures"].extend([
+            "Training loss curves",
+            "Comparison bar chart",
+            "Ablation study chart",
+            "Architecture diagram",
+        ])
+        suggestions["estimated_words_added"] += 300
+    
+    suggestions["additional_analyses"].extend([
+        "Statistical significance test (t-test or Wilcoxon)",
+        "Error analysis on failure cases",
+        "Computational cost comparison",
+    ])
+    suggestions["estimated_words_added"] += 500
+    
+    suggestions["experiment_status"] = summary
+    
+    return json.dumps({
+        "status": "EXPANSION_PLAN",
+        "current_experiments": summary["total_runs"],
+        "current_figures": len(existing_figures),
+        "suggestions": suggestions,
+        "next_actions": [
+            "run_experiment() for additional baselines",
+            "run_ablation() for component analysis",
+            "plot_comparison_bar() for visualization",
+            "check_significance() for statistical tests",
+        ],
+    }, indent=2)
