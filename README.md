@@ -2,48 +2,16 @@
 
 End-to-end AI research pipeline MCP server for Cursor. Enables vibe-coding style research workflow from idea generation to paper publication.
 
-## Overview
-
-ResearchMCP provides 67+ tools for the complete research workflow:
-
-```
-Papers → Ideas → Approval → Experiments → Results → Paper → PDF
-```
-
-**Key Features:**
-- 🔍 **Smart Paper Discovery**: Search HuggingFace trending with topic queries, arXiv by category
-- 💡 **Idea Generation with Approval**: Generate ideas ranked by novelty, requiring user approval before experiments
-- 🔬 **Experiment Management**: Full lifecycle with Git tracking, checkpoints, and environment isolation
-- 📊 **Publication-Ready Output**: Generate figures, tables, and full LaTeX papers
-- 📝 **A* Conference Support**: Auto-format for NeurIPS, ICML, ICLR, CVPR, ACL, and 10+ more
-- 📄 **PDF Compilation**: Direct LaTeX to PDF compilation with automatic package management
-
-## Installation
+## Quick Start
 
 ```bash
+# 1. Install
 cd research-mcp
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
-```
 
-### LaTeX Setup (for PDF compilation)
-
-```bash
-# macOS
-brew install --cask basictex
-sudo tlmgr update --self
-sudo tlmgr install environ units multirow algorithms algorithm2e
-
-# Ubuntu/Debian
-sudo apt install texlive-latex-extra texlive-fonts-recommended
-```
-
-## Configuration for Cursor
-
-Add to `~/.cursor/mcp.json`:
-
-```json
+# 2. Add to ~/.cursor/mcp.json
 {
   "mcpServers": {
     "research-mcp": {
@@ -53,430 +21,358 @@ Add to `~/.cursor/mcp.json`:
     }
   }
 }
+
+# 3. Restart Cursor and start chatting!
 ```
 
-## Complete Workflow Example
-
-### 1. Discover Trending Papers
+## Workflow Overview
 
 ```
-"Find gradient boosting papers on HuggingFace"
-→ fetch_hf_trending(topic="gradient boosting", max_results=10)
-
-Results: GBRL, GrowNet, FairGBM, NGBoost, GRANDE...
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          RESEARCH WORKFLOW                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. CONTEXT         2. IDEAS           3. APPROVAL        4. SETUP          │
+│  ─────────────      ─────────────      ─────────────      ─────────────     │
+│  fetch_hf_trending  generate_ideas     USER TYPES:        create_env        │
+│  search_papers      (ranked by         APPROVE <id>       install_deps      │
+│  extract_context    novelty)           CODE <code>        setup_datasets    │
+│                                         ▲                                    │
+│                                         │ BLOCKED                            │
+│                                         │ until user                         │
+│                                         │ approves                           │
+│                                                                              │
+│  5. EXPERIMENTS     6. ANALYSIS        7. WRITING         8. FORMAT         │
+│  ─────────────      ─────────────      ─────────────      ─────────────     │
+│  run_experiment     compare_baselines  format_table       cast_to_format    │
+│  run_ablation       check_significance get_citations      compile_paper     │
+│  collect_metrics    plot_comparison    create_skeleton    generate_poster   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The `topic` parameter enables smart search on HuggingFace's trending page, returning only relevant papers.
+**Key Principle**: The workflow enforces human oversight. Ideas require explicit approval with a confirmation code before experiments can run.
+
+## Step-by-Step Usage
+
+### Step 1: Create a Project
 
 ```
-"Fetch trending ML papers from arXiv"
-→ fetch_arxiv_trending(category="cs.LG", days=7, max_results=20)
+You: "Create a new research project on efficient attention"
 
-"Search for papers on attention mechanisms"
-→ search_papers(query="attention mechanisms transformers", min_relevance=0.3)
+AI calls: create_project(name="efficient_attention", description="...")
+AI calls: create_workflow(project_id="efficient_attention")
 ```
 
-### 2. Extract Paper Context
+### Step 2: Gather Papers
 
 ```
-"Extract structure from this paper"
-→ extract_paper_context(arxiv_id="2502.14678")
+You: "Find papers on linear attention transformers"
 
-Returns:
-- Section structure and word counts
-- Figure/table analysis
-- Citation patterns
-- Writing style metrics
+AI calls: fetch_hf_trending(topic="linear attention transformers", max_results=10)
+AI calls: search_papers(query="efficient attention mechanisms", max_results=10)
 ```
 
-### 3. Create a Research Project
+### Step 3: Generate Ideas
 
 ```
-"Create a new project for MLX boosting research"
-→ create_project(name="mlx_boosting", description="Gradient boosting on Apple Silicon")
+You: "Generate research ideas from these papers"
 
-Creates:
-projects/mlx_boosting/
-├── context/      # Extracted paper contexts
-├── ideas/        # Generated and approved ideas
-├── experiments/  # Experiment runs and logs
-├── papers/       # Generated LaTeX files
-├── data/         # Datasets
-└── figures/      # Generated plots
+AI calls: generate_ideas(paper_ids=[...], count=3, focus="efficiency")
 ```
 
-### 4. Generate Research Ideas (with Approval)
+The AI will receive a response like:
 
-```
-"Generate ideas based on these papers"
-→ generate_ideas(paper_ids=["arxiv:2407.08250", "arxiv:2209.07850"], count=3, focus="efficiency")
-
-Returns ranked ideas with novelty scores:
-1. ⭐⭐⭐⭐☆ (0.8) "Unified Framework for..." - RECOMMENDED
-2. ⭐⭐⭐☆☆ (0.6) "Efficient Variant..."
-3. ⭐⭐☆☆☆ (0.4) "Extension to..."
-
-ACTION REQUIRED: Call approve_idea(idea_id) to proceed
-```
-
-**Ideas require explicit approval before experiments can run:**
-
-```
-"Approve this idea"
-→ approve_idea(idea_id="idea_abc123", user_feedback="Proceed with MLX focus")
-
-"Reject this idea"
-→ reject_idea(idea_id="idea_xyz789", reason="Too similar to existing work")
+```json
+{
+  "status": "BLOCKED_AWAITING_USER_APPROVAL",
+  "ranked_ideas": [
+    {"idea_id": "idea_abc123", "title": "...", "novelty_score": 0.85},
+    {"idea_id": "idea_def456", "title": "...", "novelty_score": 0.72}
+  ],
+  "user_instructions": {
+    "approval_commands": [
+      {"idea_id": "idea_abc123", "approval_command": "APPROVE idea_abc123 CODE 7382"},
+      {"idea_id": "idea_def456", "approval_command": "APPROVE idea_def456 CODE 4519"}
+    ]
+  },
+  "ai_instruction": "STOP HERE. Do NOT call approve_idea. Wait for user."
+}
 ```
 
-### 5. Define Hypotheses and Plan
+### Step 4: YOU Approve an Idea
+
+**This is the critical step.** The AI cannot proceed without your approval.
 
 ```
-"Define testable hypotheses"
-→ define_hypotheses(idea_id="idea_abc123")
+You: "APPROVE idea_abc123 CODE 7382"
 
-Returns:
-- H1: Primary performance hypothesis
-- H2: Ablation hypothesis
-- H3: Efficiency hypothesis
-- H4: Generalization hypothesis
+AI calls: approve_idea(idea_id="idea_abc123", confirmation_code="7382")
 
-"Create research plan"
-→ create_research_plan(idea_id="idea_abc123")
-
-Returns:
-- Phase 1: Literature (1-2 weeks)
-- Phase 2: Methodology (2-3 weeks)
-- Phase 3: Experiments (3-4 weeks)
-- Phase 4: Analysis (1-2 weeks)
-- Phase 5: Writing (2 weeks)
+Response: "✅ Idea approved. Workflow unlocked."
 ```
 
-### 6. Setup Experiment Environment
+### Step 5: Check What's Next
 
 ```
-"Create a venv for experiments"
-→ create_experiment_env(name="mlx_exp", python="3.11", use_conda=false)
+You: "What should we do next?"
 
-"Install dependencies"
-→ install_dependencies(env_name="mlx_exp", requirements=["mlx", "numpy", "pandas"])
+AI calls: get_next_action()
 
-"Check GPU availability"
-→ check_gpu_availability()
-
-"Setup datasets"
-→ setup_datasets(datasets=["california_housing", "iris"])
+Response: {
+  "status": "IN_PROGRESS",
+  "stage": "experiment_setup",
+  "next_action": {"tool": "create_experiment_env", "description": "Create Python environment"}
+}
 ```
 
-### 7. Run Experiments
+### Step 6: Setup Environment & Run Experiments
 
 ```
-"Run the main experiment"
-→ run_experiment(script="train.py", config="config.yaml", name="main_run")
+You: "Setup the experiment environment"
 
-"Monitor training"
-→ monitor_training(experiment_name="main_run")
-
-"Save checkpoint"
-→ save_checkpoint(experiment_name="main_run", checkpoint_name="best_model")
-
-"Run ablation study"
-→ run_ablation(script="train.py", ablation_params={"learning_rate": [0.01, 0.001], "depth": [3, 5, 7]})
+AI calls: create_experiment_env(name="exp_env", python="3.11")
+AI calls: install_dependencies(env_name="exp_env", requirements=["torch", "numpy"])
+AI calls: define_hypotheses(idea_id="idea_abc123")
 ```
 
-### 8. Collect and Analyze Results
-
 ```
-"Collect metrics from experiments"
-→ collect_metrics(experiments=["baseline", "ours", "ablation"])
+You: "Run the experiments"
 
-"Compute statistics"
-→ compute_statistics(results={"ours": [0.92, 0.91, 0.93], "baseline": [0.85, 0.84, 0.86]})
-
-Returns:
-- Mean, std, standard error
-- 95% confidence intervals
-
-"Check statistical significance"
-→ check_significance(method1="ours", method2="baseline", results=..., test="t-test")
-
-Returns:
-- t-statistic, p-value
-- Effect size (Cohen's d)
-- Significance decision
+AI calls: run_experiment(script="train.py", name="main_run")
+AI calls: collect_metrics(experiments=["main_run"])
 ```
 
-### 9. Generate Visualizations
+### Step 7: Analyze Results & Generate Figures
 
 ```
-"Plot training curves"
-→ plot_training_curves(experiments=["exp1", "exp2"], metrics=["loss", "accuracy"])
+You: "Analyze results and create visualizations"
 
-"Create comparison bar chart"
-→ plot_comparison_bar(results={"sklearn": 0.85, "xgboost": 0.92, "ours": 0.94}, metric="R² Score")
-
-"Generate LaTeX results table"
-→ format_results_table(results={"Method A": {"Acc": 0.92, "F1": 0.91}, "Method B": {"Acc": 0.89, "F1": 0.88}})
+AI calls: compare_to_baselines(method="ours", baselines=["baseline1", "baseline2"], results={...})
+AI calls: plot_comparison_bar(results={...}, metric="accuracy")
+AI calls: plot_training_curves(experiments=["main_run"], metrics=["loss"])
+AI calls: check_significance(method1="ours", method2="baseline", results={...})
 ```
 
-### 10. Write the Paper
+### Step 8: Write and Format Paper
 
 ```
-"Estimate paper structure for 9 pages"
-→ estimate_paper_structure(conference="neurips", target_pages=9)
+You: "Write the paper for NeurIPS"
 
-Returns:
-- Total words: 4950
-- Introduction: 742 words (15%)
-- Method: 1386 words (28%)
-- Experiments: 1584 words (32%)
-- Recommended: 8 figures, 4 tables, 57 citations
-
-"Create paper skeleton"
-→ create_paper_skeleton(title="MLX-Boost: Efficient Gradient Boosting on Apple Silicon", conference="neurips")
-
-"Format equation"
-→ format_equation(equation="\\nabla L(y, f(x)) = -2(y - f(x))", label="eq:gradient")
-
-"Format algorithm"
-→ format_algorithm(steps=["Initialize f_0", "For m=1 to M:", "  Compute residuals", "  Fit tree", "  Update"], caption="Gradient Boosting")
-
-"Get citations for topic"
-→ get_citations_for_topic(topic="gradient boosting", max_citations=10)
+AI calls: get_citations_for_topic(topic="attention mechanisms")
+AI calls: format_results_table(results={...})
+AI calls: cast_to_format(conference="neurips", paper_content={...})
+AI calls: compile_paper(tex_file="output/paper_neurips.tex")
 ```
 
-### 11. Format for Conference Submission
+## Workflow Enforcement
+
+The system prevents skipping steps:
+
+| If you try... | Without... | You get... |
+|---------------|------------|------------|
+| `run_experiment` | Approved idea | `BLOCKED: Must approve idea first` |
+| `cast_to_format` | Generated figures | `BLOCKED: Generate figures first` |
+| `approve_idea` | Confirmation code | `ERROR: Code required` |
+
+### Workflow Orchestrator
+
+Always use `get_next_action()` to see what to do next:
 
 ```
-"List supported conferences"
-→ list_conferences()
+AI calls: get_next_action()
 
-"Get NeurIPS requirements"
-→ get_conference_requirements(conference="neurips")
-
-"Convert to NeurIPS format"
-→ cast_to_format(conference="neurips", paper_content={...})
-
-"Generate poster"
-→ generate_poster(conference="neurips", paper_content={...})
-
-"Generate supplementary materials"
-→ generate_supplementary(include_code=true, include_data=false)
+Response: {
+  "status": "IN_PROGRESS",
+  "stage": "analysis",
+  "progress": {
+    "completed": ["create_experiment_env", "run_experiment"],
+    "remaining": ["plot_comparison_bar", "compare_to_baselines"]
+  },
+  "next_action": {"tool": "plot_comparison_bar", "description": "Create comparison chart"}
+}
 ```
 
-### 12. Compile to PDF
+## Idea Approval System
 
-```
-"Compile the paper"
-→ compile_paper(tex_file="projects/my_project/papers/main.tex")
+Ideas require a **confirmation code** that only you can see:
 
-Returns:
-- PDF path: /path/to/paper.pdf
-- Compilation logs
-- Missing package suggestions if any
-```
+1. `generate_ideas()` returns ideas with codes: `APPROVE idea_x CODE 1234`
+2. AI is instructed to STOP and wait
+3. You type the approval command in chat
+4. AI calls `approve_idea(idea_id, confirmation_code)`
+5. Workflow unlocks for experiments
+
+This prevents the AI from auto-approving low-quality ideas.
+
+## Complete Tool Reference (70 tools)
+
+### Paper Aggregation (6 tools)
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `fetch_arxiv_trending` | Fetch by arXiv category | `fetch_arxiv_trending(category="cs.LG", max_results=20)` |
+| `fetch_hf_trending` | HuggingFace with topic search | `fetch_hf_trending(topic="gradient boosting", max_results=10)` |
+| `search_papers` | Semantic search with relevance | `search_papers(query="attention", min_relevance=0.3)` |
+| `get_paper_details` | Full paper metadata | `get_paper_details(paper_id="2409.07146")` |
+| `clone_paper_code` | Clone GitHub repo | `clone_paper_code(paper_id="2409.07146")` |
+| `extract_paper_context` | Extract structure/style | `extract_paper_context(arxiv_id="2409.07146")` |
+
+### Project & Workflow (6 tools)
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `create_project` | Create project structure | `create_project(name="my_research")` |
+| `list_projects` | List all projects | `list_projects()` |
+| `set_current_project` | Set active project | `set_current_project(project_id="my_research")` |
+| `create_workflow` | Create workflow tracker | `create_workflow(project_id="my_research")` |
+| `get_next_action` | **Get next required step** | `get_next_action()` |
+| `get_workflow_checklist` | Full workflow status | `get_workflow_checklist()` |
+
+### Idea Generation (7 tools)
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `generate_ideas` | Generate ranked ideas | `generate_ideas(paper_ids=[...], count=3)` |
+| `approve_idea` | **Requires confirmation code** | `approve_idea(idea_id="...", confirmation_code="1234")` |
+| `reject_idea` | Reject with feedback | `reject_idea(idea_id="...", reason="...")` |
+| `list_ideas` | List ideas by status | `list_ideas(status="approved")` |
+| `check_novelty` | Check against literature | `check_novelty(idea="...")` |
+| `define_hypotheses` | Create testable hypotheses | `define_hypotheses(idea_id="...")` |
+| `create_research_plan` | Create phased plan | `create_research_plan(idea_id="...")` |
+
+### Environment Setup (6 tools)
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `create_experiment_env` | Create venv/conda | `create_experiment_env(name="exp", python="3.11")` |
+| `install_dependencies` | Install packages | `install_dependencies(env_name="exp", requirements=["torch"])` |
+| `setup_docker` | Generate Dockerfile | `setup_docker(requirements_file="requirements.txt")` |
+| `check_gpu_availability` | Check GPU resources | `check_gpu_availability()` |
+| `clone_baseline_repos` | Clone baselines | `clone_baseline_repos(paper_ids=[...])` |
+| `setup_datasets` | Prepare datasets | `setup_datasets(datasets=["mnist", "cifar10"])` |
+
+### Experiment Execution (6 tools)
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `run_experiment` | Run with logging | `run_experiment(script="train.py", name="run1")` |
+| `run_baseline` | Run baseline method | `run_baseline(baseline_dir="baselines/method1")` |
+| `run_ablation` | Run ablation study | `run_ablation(script="train.py", ablation_params={...})` |
+| `monitor_training` | Monitor progress | `monitor_training(experiment_name="run1")` |
+| `save_checkpoint` | Save checkpoint | `save_checkpoint(experiment_name="run1")` |
+| `resume_experiment` | Resume from checkpoint | `resume_experiment(experiment_name="run1", checkpoint="...")` |
+
+### Data Collection (6 tools)
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `collect_metrics` | Collect from logs | `collect_metrics(experiments=["run1", "run2"])` |
+| `parse_tensorboard` | Parse TB logs | `parse_tensorboard(log_dir="logs/")` |
+| `parse_wandb` | Parse W&B runs | `parse_wandb(project="my_project")` |
+| `aggregate_results` | Aggregate across runs | `aggregate_results(experiments=[...])` |
+| `export_to_csv` | Export to CSV | `export_to_csv(results={...}, output_path="results.csv")` |
+| `compute_statistics` | Compute mean, std, CI | `compute_statistics(results={...})` |
+
+### Visualization (8 tools)
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `plot_training_curves` | **Required for papers** | `plot_training_curves(experiments=[...], metrics=["loss"])` |
+| `plot_comparison_bar` | **Required for papers** | `plot_comparison_bar(results={...}, metric="accuracy")` |
+| `plot_ablation_table` | LaTeX ablation table | `plot_ablation_table(results={...})` |
+| `plot_scatter` | Scatter with regression | `plot_scatter(x_data=[...], y_data=[...])` |
+| `plot_heatmap` | Heatmap visualization | `plot_heatmap(data=[[...]])` |
+| `plot_qualitative` | Side-by-side images | `plot_qualitative(images=[...])` |
+| `generate_architecture_diagram` | Model diagram | `generate_architecture_diagram(components=[...])` |
+| `style_for_conference` | Apply conference style | `style_for_conference(figure_path="...", conference="neurips")` |
+
+### Results Verification (5 tools)
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `verify_hypothesis` | Statistical test | `verify_hypothesis(hypothesis="...", results={...})` |
+| `check_significance` | Significance test | `check_significance(method1="ours", method2="baseline", results={...})` |
+| `detect_anomalies` | Find outliers | `detect_anomalies(results={...})` |
+| `compare_to_baselines` | **Required for papers** | `compare_to_baselines(method="ours", baselines=[...], results={...})` |
+| `generate_results_summary` | Summary report | `generate_results_summary(experiments=[...])` |
+
+### Paper Writing (11 tools)
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `estimate_paper_structure` | Word/figure estimates | `estimate_paper_structure(conference="neurips")` |
+| `format_results_table` | LaTeX results table | `format_results_table(results={...})` |
+| `format_ablation_table` | LaTeX ablation table | `format_ablation_table(ablations={...})` |
+| `get_citations_for_topic` | Get BibTeX citations | `get_citations_for_topic(topic="attention")` |
+| `format_figure` | Figure LaTeX | `format_figure(figure_path="...", caption="...")` |
+| `format_algorithm` | Algorithm LaTeX | `format_algorithm(steps=[...], caption="...")` |
+| `format_equation` | Equation LaTeX | `format_equation(equation="...", label="...")` |
+| `create_paper_skeleton` | Paper structure | `create_paper_skeleton(title="...", conference="neurips")` |
+| `get_paper_context` | Get writing context | `get_paper_context(paper_ids=[...])` |
+| `validate_latex` | Validate syntax | `validate_latex(latex_content="...")` |
+| `save_to_file` | Save content | `save_to_file(content="...", filename="...")` |
+
+### Conference Formatting (6 tools)
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `list_conferences` | List all conferences | `list_conferences()` |
+| `get_conference_requirements` | Format requirements | `get_conference_requirements(conference="neurips")` |
+| `cast_to_format` | Convert to format | `cast_to_format(conference="neurips", paper_content={...})` |
+| `generate_poster` | Generate poster | `generate_poster(conference="neurips", paper_content={...})` |
+| `generate_supplementary` | Generate supplementary | `generate_supplementary(include_code=true)` |
+| `compile_paper` | Compile to PDF | `compile_paper(tex_file="paper.tex")` |
 
 ## Supported Conferences
 
-| Conference | Page Limit | Columns | Abstract Limit | Citation Style |
-|------------|------------|---------|----------------|----------------|
-| NeurIPS    | 9          | 1       | 250 words      | Numeric        |
-| ICML       | 9          | 2       | 200 words      | Author-year    |
-| ICLR       | 9          | 1       | 250 words      | Author-year    |
-| CVPR       | 8          | 2       | 300 words      | Numeric        |
-| ICCV       | 8          | 2       | 300 words      | Numeric        |
-| ECCV       | 14         | 1       | 300 words      | Numeric        |
-| ACL        | 8          | 2       | 200 words      | Author-year    |
-| EMNLP      | 9          | 2       | 200 words      | Author-year    |
-| AAAI       | 7          | 2       | 150 words      | Author-year    |
+| Conference | Pages | Columns | Abstract | Style |
+|------------|-------|---------|----------|-------|
+| NeurIPS | 9 | 1 | 250 words | Numeric |
+| ICML | 9 | 2 | 200 words | Author-year |
+| ICLR | 9 | 1 | 250 words | Author-year |
+| CVPR | 8 | 2 | 300 words | Numeric |
+| ICCV | 8 | 2 | 300 words | Numeric |
+| ECCV | 14 | 1 | 300 words | Numeric |
+| ACL | 8 | 2 | 200 words | Author-year |
 
-## Complete Tool Reference
+## LaTeX Setup
 
-### Paper Aggregation (6 tools)
-| Tool | Description |
-|------|-------------|
-| `fetch_arxiv_trending` | Fetch trending papers by arXiv category |
-| `fetch_hf_trending` | Fetch HuggingFace papers with optional topic search |
-| `search_papers` | Semantic search with relevance scoring |
-| `get_paper_details` | Get full paper metadata |
-| `clone_paper_code` | Clone paper's GitHub repository |
-| `extract_paper_context` | Extract structure and style from arXiv paper |
+```bash
+# macOS
+brew install --cask basictex
+sudo tlmgr update --self
+sudo tlmgr install environ units multirow algorithms algorithm2e lastpage
 
-### Project Management (4 tools)
-| Tool | Description |
-|------|-------------|
-| `create_project` | Create project with directory structure |
-| `list_projects` | List all research projects |
-| `get_current_project` | Get active project |
-| `set_current_project` | Set active project |
-
-### Workflow Tracking (2 tools)
-| Tool | Description |
-|------|-------------|
-| `create_workflow` | Create workflow for a project |
-| `get_workflow_status` | Get workflow progress |
-
-### Idea Generation (7 tools)
-| Tool | Description |
-|------|-------------|
-| `generate_ideas` | Generate ideas with novelty ranking |
-| `approve_idea` | Approve idea for experiments |
-| `reject_idea` | Reject idea with feedback |
-| `list_ideas` | List all ideas by status |
-| `check_novelty` | Check idea against literature |
-| `create_research_plan` | Create structured plan |
-| `define_hypotheses` | Define testable hypotheses |
-
-### Environment Setup (6 tools)
-| Tool | Description |
-|------|-------------|
-| `create_experiment_env` | Create conda/venv environment |
-| `install_dependencies` | Install packages |
-| `setup_docker` | Generate Dockerfile |
-| `check_gpu_availability` | Check GPU resources |
-| `clone_baseline_repos` | Clone baseline code |
-| `setup_datasets` | Download and prepare datasets |
-
-### Experiment Execution (6 tools)
-| Tool | Description |
-|------|-------------|
-| `run_experiment` | Run experiment with logging |
-| `run_baseline` | Run baseline method |
-| `run_ablation` | Run ablation study |
-| `monitor_training` | Monitor experiment progress |
-| `save_checkpoint` | Save experiment checkpoint |
-| `resume_experiment` | Resume from checkpoint |
-
-### Data Collection (6 tools)
-| Tool | Description |
-|------|-------------|
-| `collect_metrics` | Collect from log files |
-| `parse_tensorboard` | Parse TensorBoard logs |
-| `parse_wandb` | Parse W&B runs |
-| `aggregate_results` | Aggregate across runs |
-| `export_to_csv` | Export results to CSV |
-| `compute_statistics` | Compute mean, std, CI |
-
-### Visualization (8 tools)
-| Tool | Description |
-|------|-------------|
-| `plot_training_curves` | Loss/accuracy curves |
-| `plot_comparison_bar` | Method comparison bars |
-| `plot_ablation_table` | LaTeX ablation table |
-| `plot_scatter` | Scatter plot with regression |
-| `plot_heatmap` | Heatmap visualization |
-| `plot_qualitative` | Side-by-side images |
-| `generate_architecture_diagram` | Model architecture |
-| `style_for_conference` | Apply conference styling |
-
-### Results Verification (5 tools)
-| Tool | Description |
-|------|-------------|
-| `verify_hypothesis` | Statistical hypothesis test |
-| `check_significance` | Significance between methods |
-| `detect_anomalies` | Detect result anomalies |
-| `compare_to_baselines` | Compare to all baselines |
-| `generate_results_summary` | Summary of all experiments |
-
-### Paper Writing (11 tools)
-| Tool | Description |
-|------|-------------|
-| `estimate_paper_structure` | Estimate words, figures, citations |
-| `format_results_table` | Generate LaTeX results table |
-| `format_ablation_table` | Generate LaTeX ablation table |
-| `get_citations_for_topic` | Get BibTeX citations |
-| `format_figure` | Generate figure LaTeX |
-| `format_algorithm` | Generate algorithm LaTeX |
-| `format_equation` | Generate equation LaTeX |
-| `create_paper_skeleton` | Create paper structure |
-| `get_paper_context` | Get context for writing |
-| `validate_latex` | Validate LaTeX syntax |
-| `save_to_file` | Save content to file |
-
-### Conference Formatting (6 tools)
-| Tool | Description |
-|------|-------------|
-| `list_conferences` | List all supported conferences |
-| `get_conference_requirements` | Get format requirements |
-| `cast_to_format` | Convert to conference format |
-| `generate_poster` | Generate poster LaTeX |
-| `generate_supplementary` | Generate supplementary |
-| `compile_paper` | Compile LaTeX to PDF |
-
-## Project Structure
-
+# Ubuntu/Debian
+sudo apt install texlive-latex-extra texlive-fonts-recommended
 ```
-research-mcp/
-├── src/
-│   ├── server.py              # MCP server (67 tools)
-│   ├── tools/
-│   │   ├── aggregation.py     # Paper fetching + search
-│   │   ├── ideas.py           # Idea generation + approval
-│   │   ├── environment.py     # Environment setup
-│   │   ├── experiments.py     # Experiment execution
-│   │   ├── data_collection.py # Metrics collection
-│   │   ├── visualization.py   # Plotting
-│   │   ├── verification.py    # Statistical tests
-│   │   ├── writing.py         # LaTeX formatting utilities
-│   │   └── formatting.py      # Conference formatting + PDF
-│   ├── apis/
-│   │   ├── arxiv.py           # arXiv API (with rate limiting)
-│   │   ├── huggingface.py     # HF API (with topic search)
-│   │   └── semantic_scholar.py # S2 API (with fallback)
-│   ├── context/
-│   │   ├── extractor.py       # Paper structure extraction
-│   │   ├── profiles.py        # Context profile storage
-│   │   └── styles.py          # Conference style guidelines
-│   ├── project/
-│   │   ├── manager.py         # Project directory management
-│   │   └── git_ops.py         # Git integration
-│   └── db/
-│       ├── papers_cache.py    # Paper caching (SQLite + FTS5)
-│       ├── experiments_db.py  # Experiment + ideas storage
-│       ├── conferences.py     # Conference requirements
-│       └── workflow.py        # Workflow state persistence
-├── templates/
-│   └── neurips/               # Official NeurIPS templates
-├── data/
-│   ├── conferences.json       # Conference metadata
-│   └── figure_styles.json     # Figure styling rules
-├── projects/                  # Created research projects
-├── output/                    # Generated papers
-├── run_server.py              # Server launcher
-├── requirements.txt
-└── pyproject.toml
-```
-
-## Design Philosophy
-
-This MCP follows **vibe-coding** principles:
-
-1. **Tools, not content**: The MCP provides formatting utilities. The LLM in Cursor chat generates the actual paper content.
-
-2. **User approval required**: Ideas must be explicitly approved before experiments can run, ensuring human oversight.
-
-3. **Workflow enforcement**: Cannot skip steps (e.g., can't run experiments without an approved idea).
-
-4. **Context gathering**: Extract and save paper contexts to inform better writing.
-
-5. **Project isolation**: Each research project has its own directory structure to prevent overwriting.
 
 ## Troubleshooting
 
-### arXiv returns 403
-Rate limiting is enabled (3s delay between requests). If issues persist, wait a few minutes.
+### "BLOCKED: Must approve idea first"
+You need to type the approval command shown after `generate_ideas()`:
+```
+APPROVE idea_xyz CODE 1234
+```
 
-### Semantic Scholar returns 403
-Graceful fallback is implemented. Results will come from arXiv and HuggingFace instead.
+### arXiv/Semantic Scholar returns 403
+Rate limiting is active. Wait a few seconds between requests.
 
-### PDF compilation fails
-Run the missing package install command shown in the error:
+### PDF compilation fails with missing package
 ```bash
 sudo tlmgr install <package_name>
 ```
 
-### HuggingFace topic search returns irrelevant papers
-The topic search parses the embedded JSON from `huggingface.co/papers/trending?q=<query>`. If no results, try different keywords.
+### AI keeps trying to auto-approve ideas
+The confirmation code system should prevent this. If it happens, the `approve_idea` call will fail without the correct code.
+
+## Design Philosophy
+
+1. **Human approval required**: Ideas need explicit approval with confirmation codes
+2. **Workflow enforcement**: Can't skip steps (no experiments without approved idea)
+3. **Tools, not content**: MCP provides utilities; LLM generates actual content
+4. **Project isolation**: Each project has its own directory structure
 
 ## License
 
