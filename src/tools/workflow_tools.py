@@ -18,14 +18,20 @@ MIN_TABLE_COUNT = 1
 # Stage definitions with required completions and next actions
 WORKFLOW_STAGES = {
     "context_gathering": {
-        "description": "Gather relevant papers and extract context",
-        "required_tools": ["fetch_arxiv_trending", "fetch_hf_trending", "search_papers"],
-        "completion_check": lambda w: len(w.gathered_papers) >= 3,
+        "description": "Gather relevant papers, extract context, and set target metrics",
+        "required_tools": [
+            "fetch_arxiv_trending",
+            "fetch_hf_trending",
+            "search_papers",
+            "extract_paper_metrics",
+            "set_target_metrics_from_papers",
+        ],
+        "completion_check": lambda w: len(w.gathered_papers) >= 3 and w.target_metrics is not None,
         "next_stage": "idea_generation",
     },
     "idea_generation": {
         "description": "Generate research ideas from gathered context",
-        "required_tools": ["generate_ideas"],
+        "required_tools": ["generate_ideas", "submit_idea"],
         "completion_check": lambda w: len(w.generated_ideas) > 0,
         "next_stage": "idea_approval",
     },
@@ -46,9 +52,14 @@ WORKFLOW_STAGES = {
         "next_stage": "experimenting",
     },
     "experimenting": {
-        "description": "Run experiments and collect data",
-        "required_tools": ["run_experiment", "run_baseline", "collect_metrics"],
-        "completion_check": lambda w: len(w.completed_experiments) > 0,
+        "description": "Run experiments with proper tracking and logging",
+        "required_tools": [
+            "run_experiment",
+            "run_baseline",
+            "log_experiment",
+            "collect_metrics",
+        ],
+        "completion_check": lambda w: len(w.completed_experiments) > 0 and len(w.experiment_runs) > 0,
         "next_stage": "analysis",
     },
     "analysis": {
@@ -59,25 +70,32 @@ WORKFLOW_STAGES = {
             "plot_comparison_bar",
             "plot_training_curves",
             "compare_to_baselines",
+            "get_experiment_history",
         ],
         "completion_check": lambda w: len(w.figures_generated) >= 2,
         "next_stage": "writing",
     },
     "writing": {
-        "description": "Write the paper with proper formatting",
+        "description": "Write the paper, check completeness against targets",
         "required_tools": [
             "estimate_paper_structure",
             "format_results_table",
             "get_citations_for_topic",
             "create_paper_skeleton",
+            "check_paper_completeness",
         ],
         "completion_check": lambda w: len(w.paper_sections) >= 3,
         "next_stage": "formatting",
     },
     "formatting": {
-        "description": "Format paper for conference submission",
-        "required_tools": ["cast_to_format", "compile_paper"],
-        "completion_check": lambda w: w.target_conference is not None,
+        "description": "Format paper, create GitHub repo, and compile PDF",
+        "required_tools": [
+            "cast_to_format",
+            "compile_paper",
+            "create_github_repo",
+            "finalize_paper_with_github",
+        ],
+        "completion_check": lambda w: w.target_conference is not None and w.github_url is not None,
         "next_stage": "complete",
     },
 }
@@ -221,7 +239,10 @@ def _get_completed_tools(workflow: WorkflowState, required_tools: list[str]) -> 
         if tool in ["fetch_arxiv_trending", "fetch_hf_trending", "search_papers"]:
             if len(workflow.gathered_papers) > 0:
                 completed.append(tool)
-        elif tool == "generate_ideas":
+        elif tool in ["extract_paper_metrics", "set_target_metrics_from_papers"]:
+            if workflow.target_metrics is not None:
+                completed.append(tool)
+        elif tool in ["generate_ideas", "submit_idea"]:
             if len(workflow.generated_ideas) > 0:
                 completed.append(tool)
         elif tool == "create_experiment_env":
@@ -236,11 +257,38 @@ def _get_completed_tools(workflow: WorkflowState, required_tools: list[str]) -> 
         elif tool == "run_experiment":
             if len(workflow.completed_experiments) > 0:
                 completed.append(tool)
+        elif tool == "run_baseline":
+            if len(workflow.completed_experiments) > 1:
+                completed.append(tool)
+        elif tool == "log_experiment":
+            if len(workflow.experiment_runs) > 0:
+                completed.append(tool)
+        elif tool == "get_experiment_history":
+            if len(workflow.experiment_runs) > 0:
+                completed.append(tool)
         elif tool in ["plot_comparison_bar", "plot_training_curves"]:
             if len(workflow.figures_generated) > 0:
                 completed.append(tool)
         elif tool in ["compute_statistics", "check_significance", "compare_to_baselines"]:
             if workflow.experiment_results:
+                completed.append(tool)
+        elif tool == "check_paper_completeness":
+            if len(workflow.paper_sections) > 0:
+                completed.append(tool)
+        elif tool in ["estimate_paper_structure", "format_results_table", "get_citations_for_topic", "create_paper_skeleton"]:
+            if len(workflow.paper_sections) > 0:
+                completed.append(tool)
+        elif tool == "cast_to_format":
+            if workflow.target_conference is not None:
+                completed.append(tool)
+        elif tool == "compile_paper":
+            if workflow.target_conference is not None:
+                completed.append(tool)
+        elif tool == "create_github_repo":
+            if workflow.github_url is not None:
+                completed.append(tool)
+        elif tool == "finalize_paper_with_github":
+            if workflow.github_url is not None and workflow.target_conference is not None:
                 completed.append(tool)
     
     return completed
@@ -252,12 +300,17 @@ def _get_tool_description(tool_name: str) -> str:
         "fetch_arxiv_trending": "Fetch trending papers from arXiv",
         "fetch_hf_trending": "Fetch trending papers from HuggingFace",
         "search_papers": "Search for papers by topic",
+        "extract_paper_metrics": "Extract word/figure counts from a paper",
+        "set_target_metrics_from_papers": "Set target metrics from reference papers",
         "generate_ideas": "Generate research ideas from papers",
+        "submit_idea": "Submit a generated idea for approval",
         "create_experiment_env": "Create Python environment for experiments",
         "setup_datasets": "Download and prepare datasets",
         "define_hypotheses": "Define testable hypotheses",
         "run_experiment": "Run an experiment script",
         "run_baseline": "Run baseline comparison",
+        "log_experiment": "Log experiment results to database",
+        "get_experiment_history": "Get all tracked experiment runs",
         "collect_metrics": "Collect metrics from experiment logs",
         "compute_statistics": "Compute statistical measures on results",
         "check_significance": "Run statistical significance tests",
@@ -268,8 +321,12 @@ def _get_tool_description(tool_name: str) -> str:
         "format_results_table": "Format results as LaTeX table",
         "get_citations_for_topic": "Get relevant citations",
         "create_paper_skeleton": "Create paper LaTeX structure",
+        "check_paper_completeness": "Check if paper meets target length/figures",
+        "expand_paper": "Get suggestions to expand a short paper",
         "cast_to_format": "Convert paper to conference format",
         "compile_paper": "Compile LaTeX to PDF",
+        "create_github_repo": "Create GitHub repo and push code",
+        "finalize_paper_with_github": "Add GitHub link to paper and compile",
     }
     return descriptions.get(tool_name, f"Execute {tool_name}")
 
