@@ -199,12 +199,35 @@ def _extract_key_terms(papers: list[dict]) -> dict:
     all_raw = " ".join(p.get("title", "") + " " + p.get("abstract", "")[:500] for p in papers)
     capitalized = re.findall(method_pattern, all_raw)
     
-    # Filter to likely method names (length > 3, not common words)
-    common_words = {"The", "This", "Our", "We", "They", "These", "However", "While", 
-                   "Although", "Furthermore", "Moreover", "Results", "Method", "Approach",
-                   "Figure", "Table", "Section", "Abstract", "Introduction", "Related",
-                   "Experimental", "Conclusion", "Paper", "Work", "Study", "Analysis"}
-    methods = [m for m in capitalized if len(m) > 3 and m not in common_words][:6]
+    # Filter to likely method names - exclude common descriptive words
+    common_words = {
+        # Generic words
+        "The", "This", "Our", "We", "They", "These", "However", "While", 
+        "Although", "Furthermore", "Moreover", "Results", "Method", "Approach",
+        "Figure", "Table", "Section", "Abstract", "Introduction", "Related",
+        "Experimental", "Conclusion", "Paper", "Work", "Study", "Analysis",
+        # Descriptive adjectives often capitalized in titles
+        "Scalable", "Efficient", "Fast", "Novel", "Accurate", "Robust",
+        "Simple", "Effective", "Improved", "Better", "New", "High", "Low",
+        "Large", "Small", "Deep", "Wide", "Long", "Short", "Local", "Global",
+        "Sparse", "Dense", "Linear", "Dynamic", "Static", "Adaptive", "Smart",
+        "Training", "Learning", "Inference", "Acceleration", "Attention",
+        "Based", "Free", "Aware", "Guided", "Driven", "Enhanced", "Unified",
+        # Generic ML terms
+        "Model", "Models", "Network", "Networks", "Framework", "System",
+        "Architecture", "Architectures", "Module", "Modules", "Layer", "Layers",
+        "Transformer", "Transformers", "Neural", "Machine", "Data", "Dataset",
+    }
+    methods = [m for m in capitalized if len(m) > 2 and m not in common_words][:8]
+    
+    # Also look for acronyms (all caps, 2-6 chars)
+    acronym_pattern = r'\b([A-Z]{2,6})\b'
+    acronyms = re.findall(acronym_pattern, all_raw)
+    acronym_blacklist = {"GPU", "CPU", "TPU", "RAM", "API", "FPS", "RGB", "NLP", "CV", "ML", "AI", "LLM", "CNN", "RNN", "GNN", "MLP", "SOTA", "FPGA"}
+    valid_acronyms = [a for a in acronyms if a not in acronym_blacklist and len(a) >= 3][:4]
+    
+    # Combine methods and acronyms
+    methods = list(dict.fromkeys(valid_acronyms + methods))[:6]  # Dedupe, acronyms first
     
     # Extract key noun phrases from titles
     titles = [p.get("title", "") for p in papers]
