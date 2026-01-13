@@ -1,0 +1,13 @@
+{
+  "project_id": "efficient_transformers_research",
+  "name": "efficient_transformers_research",
+  "description": "Research on efficient attention mechanisms for transformers",
+  "root_path": "/Users/mekashirskiy/yandexcup/vpn/research-mcp/projects/efficient_transformers_research",
+  "status": "created",
+  "current_idea_id": null,
+  "current_experiment_id": null,
+  "created_at": "2026-01-13T23:51:51.601702",
+  "updated_at": "2026-01-13T23:51:51.601702",
+  "paper_ids": [],
+  "experiment_ids": []
+}

@@ -1,0 +1,13 @@
+{
+  "project_id": "contrastrank_distillation",
+  "name": "contrastrank_distillation",
+  "description": "Contrastive Reasoning Distillation for Efficient Neural Rerankers - transferring LLM reasoning capabilities to small models for document ranking",
+  "root_path": "/Users/mekashirskiy/yandexcup/vpn/research-mcp/projects/contrastrank_distillation",
+  "status": "created",
+  "current_idea_id": null,
+  "current_experiment_id": null,
+  "created_at": "2026-01-14T00:04:18.662129",
+  "updated_at": "2026-01-14T00:04:18.662129",
+  "paper_ids": [],
+  "experiment_ids": []
+}

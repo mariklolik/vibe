@@ -185,6 +185,83 @@ def _extract_themes(text: str) -> list[str]:
     return found_themes if found_themes else ["novel_architecture", "efficiency"]
 
 
+def _extract_key_terms(papers: list[dict]) -> dict:
+    """Extract key methods, techniques, and domains from papers."""
+    import re
+    
+    all_text = " ".join(
+        p.get("title", "") + " " + p.get("abstract", "")[:500] 
+        for p in papers
+    ).lower()
+    
+    # Extract capitalized terms (likely method names)
+    method_pattern = r'\b([A-Z][a-zA-Z]+(?:[A-Z][a-zA-Z]*)*)\b'
+    all_raw = " ".join(p.get("title", "") + " " + p.get("abstract", "")[:500] for p in papers)
+    capitalized = re.findall(method_pattern, all_raw)
+    
+    # Filter to likely method names (length > 3, not common words)
+    common_words = {"The", "This", "Our", "We", "They", "These", "However", "While", 
+                   "Although", "Furthermore", "Moreover", "Results", "Method", "Approach",
+                   "Figure", "Table", "Section", "Abstract", "Introduction", "Related",
+                   "Experimental", "Conclusion", "Paper", "Work", "Study", "Analysis"}
+    methods = [m for m in capitalized if len(m) > 3 and m not in common_words][:6]
+    
+    # Extract key noun phrases from titles
+    titles = [p.get("title", "") for p in papers]
+    title_keywords = []
+    for title in titles:
+        words = title.lower().split()
+        for i, word in enumerate(words):
+            if word in ["for", "via", "using", "with", "in", "on", "to"]:
+                if i > 0:
+                    title_keywords.append(words[i-1])
+                if i < len(words) - 1:
+                    title_keywords.append(words[i+1])
+    
+    # Detect domain from content
+    domain_keywords = {
+        "document reranking": ["rerank", "ranking", "retrieval", "document", "passage"],
+        "information retrieval": ["retrieval", "search", "query", "ir ", "bm25"],
+        "text generation": ["generation", "generative", "llm", "language model"],
+        "question answering": ["qa", "question", "answer", "squad", "reading comprehension"],
+        "reasoning": ["reasoning", "cot", "chain-of-thought", "rationale"],
+        "contrastive learning": ["contrastive", "contrast", "positive", "negative", "pairs"],
+        "knowledge distillation": ["distillation", "distill", "teacher", "student"],
+        "transformer optimization": ["transformer", "attention", "efficient", "sparse"],
+        "tabular learning": ["tabular", "structured", "boosting", "tree", "xgboost", "lightgbm"],
+    }
+    
+    detected_domain = "machine learning"
+    for domain, keywords in domain_keywords.items():
+        if any(kw in all_text for kw in keywords):
+            detected_domain = domain
+            break
+    
+    # Extract specific techniques mentioned
+    technique_keywords = {
+        "contrastive learning": ["contrastive", "positive pair", "negative sample"],
+        "distillation": ["distillation", "teacher-student", "knowledge transfer"],
+        "attention mechanism": ["attention", "self-attention", "cross-attention"],
+        "ranking loss": ["pairwise", "listwise", "margin loss", "ranking loss"],
+        "fine-tuning": ["fine-tune", "finetuning", "adapter", "lora"],
+        "sparse retrieval": ["sparse", "bm25", "tf-idf", "lexical"],
+        "dense retrieval": ["dense", "embedding", "semantic", "neural"],
+    }
+    
+    techniques = []
+    for tech, keywords in technique_keywords.items():
+        if any(kw in all_text for kw in keywords):
+            techniques.append(tech)
+    
+    return {
+        "methods": methods if methods else ["neural approach"],
+        "domain": detected_domain,
+        "techniques": techniques if techniques else ["novel optimization"],
+        "title_keywords": list(set(title_keywords))[:5],
+        "paper_titles": [p.get("title", "")[:60] for p in papers[:3]],
+    }
+
+
 def _create_idea_from_themes(
     idea_id: str,
     themes: list[str],
@@ -192,88 +269,77 @@ def _create_idea_from_themes(
     focus: Optional[str],
     index: int,
 ) -> Idea:
-    """Create a research idea based on extracted themes."""
+    """Create a research idea based on ACTUAL paper content."""
     
-    # Idea templates based on common research patterns
-    idea_templates = [
-        {
-            "pattern": "combining_methods",
-            "title_template": "Unified Framework for {theme1} and {theme2} in {domain}",
-            "description_template": (
-                "We propose a unified framework that combines the strengths of {method1} "
-                "with {method2} to achieve both {benefit1} and {benefit2}. "
-                "Unlike prior work that addresses these challenges separately, our approach "
-                "provides an end-to-end solution that leverages {key_insight}."
-            ),
-            "motivation": (
-                "Existing methods either focus on {theme1} or {theme2}, but not both. "
-                "This creates a gap in the literature for approaches that can simultaneously "
-                "address multiple challenges while maintaining practical applicability."
-            ),
-        },
-        {
-            "pattern": "efficiency_improvement",
-            "title_template": "Efficient {method} via {technique} for {application}",
-            "description_template": (
-                "We introduce an efficient variant of {method} that reduces computational "
-                "complexity from O(n²) to O(n log n) through novel use of {technique}. "
-                "Our approach maintains competitive accuracy while enabling deployment on "
-                "resource-constrained devices."
-            ),
-            "motivation": (
-                "While {method} achieves state-of-the-art results, its computational "
-                "requirements limit practical deployment. Our work addresses this gap by "
-                "introducing principled approximations that preserve performance."
-            ),
-        },
-        {
-            "pattern": "novel_application",
-            "title_template": "Adapting {method} for {new_domain}: A {approach} Approach",
-            "description_template": (
-                "We adapt {method}, originally designed for {original_domain}, to the "
-                "challenging setting of {new_domain}. Our key insight is that {insight}, "
-                "which enables effective transfer through {mechanism}."
-            ),
-            "motivation": (
-                "Despite the success of {method} in {original_domain}, its application to "
-                "{new_domain} remains unexplored. We bridge this gap by identifying key "
-                "analogies and developing domain-specific adaptations."
-            ),
-        },
-    ]
+    # Extract actual terms from papers
+    terms = _extract_key_terms(papers)
+    domain = focus or terms["domain"]
+    methods = terms["methods"]
+    techniques = terms["techniques"]
+    paper_titles = terms["paper_titles"]
     
-    template = idea_templates[index % len(idea_templates)]
+    # Use first paper title as inspiration
+    main_paper = paper_titles[0] if paper_titles else "the source papers"
     
-    # Fill in template with context
-    paper_title = papers[0]["title"] if papers else "Deep Learning"
-    domain = focus or _extract_domain(papers)
+    # Create genuinely different ideas based on index
+    if index == 0:
+        # Idea 1: Combine two methods from the papers
+        method1 = methods[0] if methods else "the primary method"
+        method2 = methods[1] if len(methods) > 1 else techniques[0] if techniques else "auxiliary approach"
+        
+        title = f"Unified {method1}-{method2} Framework for {domain.title()}"
+        description = (
+            f"Building on insights from '{main_paper}', we propose combining {method1} "
+            f"with {method2} in a unified framework for {domain}. "
+            f"The key insight is that {method1} provides strong representation learning "
+            f"while {method2} enables efficient inference. Our unified approach "
+            f"achieves the benefits of both without their individual limitations."
+        )
+        motivation = (
+            f"Prior work in {domain} either uses {method1} or {method2} separately. "
+            f"We identify complementary strengths and propose a principled integration."
+        )
+        
+    elif index == 1:
+        # Idea 2: Efficiency improvement of main method
+        main_method = methods[0] if methods else "the primary approach"
+        tech = techniques[0] if techniques else "approximation techniques"
+        
+        title = f"Efficient {main_method} via {tech.title()} for Scalable {domain.title()}"
+        description = (
+            f"Inspired by '{main_paper}', we propose an efficient variant of {main_method} "
+            f"that reduces computational overhead through {tech}. "
+            f"While existing {main_method} approaches achieve strong performance, "
+            f"their quadratic complexity limits scalability. Our method maintains "
+            f"competitive accuracy with linear complexity, enabling real-world deployment."
+        )
+        motivation = (
+            f"The computational cost of {main_method} in {domain} limits practical application. "
+            f"We address this by introducing principled {tech} without sacrificing quality."
+        )
+        
+    else:
+        # Idea 3: Novel application or theoretical contribution
+        main_method = methods[0] if methods else "the proposed approach"
+        secondary = methods[1] if len(methods) > 1 else "complementary signals"
+        
+        title = f"{main_method} with {secondary.title()} for Enhanced {domain.title()}"
+        description = (
+            f"Extending ideas from '{main_paper}', we propose using {main_method} "
+            f"enhanced with {secondary} for improved {domain}. "
+            f"Our key contribution is demonstrating that {secondary} provides "
+            f"additional supervision signal that significantly improves {main_method}'s "
+            f"performance on challenging {domain} benchmarks."
+        )
+        motivation = (
+            f"While {main_method} shows promise for {domain}, its performance can be "
+            f"further improved by incorporating {secondary}. We provide theoretical "
+            f"justification and empirical validation of this combination."
+        )
     
-    # Generate specific content
-    filled_title = f"Research Idea {index + 1}: {template['pattern'].replace('_', ' ').title()}"
-    filled_description = template["description_template"].format(
-        method1="attention mechanisms",
-        method2="gradient boosting",
-        method="the proposed approach",
-        technique="structured pruning",
-        benefit1="improved accuracy",
-        benefit2="reduced latency",
-        key_insight="complementary inductive biases",
-        application=domain,
-        original_domain="natural language processing",
-        new_domain=domain,
-        insight="structural similarities exist",
-        mechanism="careful feature alignment",
-        theme1=themes[0] if themes else "efficiency",
-        theme2=themes[1] if len(themes) > 1 else "accuracy",
-    )
-    
-    filled_motivation = template["motivation"].format(
-        method="existing approaches",
-        theme1=themes[0] if themes else "efficiency",
-        theme2=themes[1] if len(themes) > 1 else "accuracy",
-        original_domain="computer vision",
-        new_domain=domain,
-    )
+    filled_title = title
+    filled_description = description
+    filled_motivation = motivation
     
     return Idea(
         idea_id=idea_id,
