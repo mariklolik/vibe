@@ -58,10 +58,16 @@ async def generate_ideas(
     count: int = 3,
     focus: Optional[str] = None,
 ) -> str:
-    """Generate research ideas with novelty scoring.
+    """
+    Provide paper context for idea generation.
     
-    Ideas are automatically scored for novelty and returned ranked (highest first).
-    User MUST call approve_idea(idea_id) to approve before experiments can proceed.
+    This tool returns the full context from gathered papers. The LLM should then:
+    1. Read the paper abstracts carefully
+    2. Generate {count} creative research ideas based on the content
+    3. Call submit_idea() for each idea
+    4. Wait for user approval
+    
+    DO NOT generate generic template ideas. Use the actual paper content.
     """
     papers_context = []
     
@@ -69,333 +75,130 @@ async def generate_ideas(
         cached = await papers_cache.get_paper(paper_id)
         if cached:
             papers_context.append({
+                "id": paper_id,
                 "title": cached.title,
-                "abstract": cached.abstract[:800],
+                "abstract": cached.abstract,  # Full abstract
                 "categories": cached.categories,
             })
     
     if not papers_context:
         return json.dumps({"error": "No papers found with provided IDs"})
     
-    # Generate ideas with novelty scoring
-    ideas = []
-    for i in range(count):
-        idea_id = f"idea_{uuid.uuid4().hex[:8]}"
-        
-        all_titles = " ".join(p["title"].lower() for p in papers_context)
-        all_abstracts = " ".join(p["abstract"].lower() for p in papers_context)
-        
-        themes = _extract_themes(all_titles + " " + all_abstracts)
-        idea = _create_idea_from_themes(idea_id, themes, papers_context, focus, i)
-        
-        # Compute novelty score for this idea
-        novelty_score, similar_works = await compute_idea_novelty(idea.description)
-        idea.novelty_score = novelty_score
-        idea.similar_works = similar_works
-        
-        await experiments_db.save_idea(idea)
-        ideas.append(idea)
-    
-    # Sort by novelty score (highest first) - this is the "scored" approach user requested
-    ideas.sort(key=lambda x: x.novelty_score or 0, reverse=True)
-    
-    # Build ranked response for user review
-    ranked_ideas = []
-    for rank, idea in enumerate(ideas, 1):
-        novelty = idea.novelty_score or 0
-        star_rating = "★" * int(novelty * 5) + "☆" * (5 - int(novelty * 5))
-        ranked_ideas.append({
-            "rank": rank,
-            "idea_id": idea.idea_id,
-            "title": idea.title,
-            "novelty_score": round(novelty, 3),
-            "novelty_rating": star_rating,
-            "description": idea.description,
-            "motivation": idea.motivation,
-            "themes": idea.themes,
-            "similar_works": idea.similar_works,
-            "recommendation": "RECOMMENDED" if rank == 1 and novelty >= 0.6 else "",
-        })
-    
-    # Build user approval instructions with confirmation codes
-    # The codes are shown to the user but the AI should NOT auto-approve
-    approval_instructions = []
-    for idea in ideas:
-        approval_instructions.append({
-            "idea_id": idea.idea_id,
-            "title": idea.title[:50],
-            "approval_command": f"APPROVE {idea.idea_id} CODE {idea.confirmation_code}",
-        })
+    # Extract themes for guidance
+    all_text = " ".join(p["title"] + " " + p["abstract"] for p in papers_context)
+    themes = _extract_themes(all_text)
     
     result = {
-        "status": "BLOCKED_AWAITING_USER_APPROVAL",
+        "status": "CONTEXT_PROVIDED",
         "message": (
-            "⚠️ IDEAS REQUIRE HUMAN APPROVAL ⚠️\n"
-            "The AI assistant MUST NOT call approve_idea automatically.\n"
-            "The USER must review ideas and type the approval command manually."
+            "Paper context loaded. Now YOU (the LLM) must generate ideas.\n"
+            "Read the abstracts below and create novel research ideas.\n"
+            "For each idea, call: submit_idea(title, description, motivation)"
         ),
-        "count": len(ideas),
+        "papers": papers_context,
+        "detected_themes": themes,
         "focus": focus,
-        "source_papers": [p["title"][:50] for p in papers_context],
-        "ranked_ideas": ranked_ideas,
-        "top_recommendation": ranked_ideas[0] if ranked_ideas else None,
-        
-        # Instructions for the USER (not the AI)
-        "user_instructions": {
-            "step_1": "Review the ideas above carefully",
-            "step_2": "Choose one idea to pursue",
-            "step_3": "Type the approval command in chat (shown below)",
-            "approval_commands": approval_instructions,
+        "requested_count": count,
+        "instructions": {
+            "step_1": "Read all paper abstracts carefully",
+            "step_2": f"Generate {count} novel research ideas that combine or extend these works",
+            "step_3": "For each idea call: submit_idea(title='...', description='...', motivation='...')",
+            "step_4": "After submitting, wait for user to approve one idea",
         },
-        
-        # Explicit instruction for AI
-        "ai_instruction": (
-            "STOP HERE. Do NOT call approve_idea or any other tool. "
-            "Wait for the user to type an approval command. "
-            "The confirmation codes are only known to the user."
-        ),
-        
-        "alternative_actions": [
-            "reject_idea(idea_id, reason) - to reject with feedback",
-            "generate_ideas(paper_ids, focus='different_topic') - to get new ideas",
+        "idea_guidelines": [
+            "Ideas should be specific to the paper content, not generic",
+            "Combine insights from multiple papers",
+            "Identify gaps or extensions the papers don't address",
+            "Be concrete about the proposed method/approach",
+            "Include what makes this novel compared to existing work",
         ],
     }
     
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
-def _extract_themes(text: str) -> list[str]:
-    """Extract key research themes from text."""
-    theme_keywords = {
-        "efficiency": ["efficient", "fast", "speed", "acceleration", "lightweight"],
-        "scalability": ["scale", "scalable", "large-scale", "distributed"],
-        "robustness": ["robust", "reliable", "stable", "generalization"],
-        "interpretability": ["interpretable", "explainable", "understanding", "visualization"],
-        "accuracy": ["accurate", "performance", "state-of-the-art", "sota"],
-        "novel_architecture": ["architecture", "network", "transformer", "attention"],
-        "training": ["training", "optimization", "learning", "convergence"],
-        "data_efficiency": ["few-shot", "low-resource", "sample efficiency", "data augmentation"],
-    }
+async def submit_idea(
+    title: str,
+    description: str,
+    motivation: str,
+    source_papers: Optional[list[str]] = None,
+) -> str:
+    """
+    Submit a research idea for user approval.
     
-    found_themes = []
-    for theme, keywords in theme_keywords.items():
-        if any(kw in text for kw in keywords):
-            found_themes.append(theme)
+    Call this after generate_ideas() returns paper context.
+    The LLM should generate creative ideas based on the papers and submit each one.
     
-    return found_themes if found_themes else ["novel_architecture", "efficiency"]
-
-
-def _extract_key_terms(papers: list[dict]) -> dict:
-    """Extract key methods, techniques, and domains from papers."""
-    import re
+    Args:
+        title: Clear, specific title for the idea
+        description: Detailed description of the proposed research (2-3 paragraphs)
+        motivation: Why this is novel and worth pursuing
+        source_papers: List of paper IDs this idea is based on
+    """
+    idea_id = f"idea_{uuid.uuid4().hex[:8]}"
+    confirmation_code = _generate_confirmation_code()
     
-    all_text = " ".join(
-        p.get("title", "") + " " + p.get("abstract", "")[:500] 
-        for p in papers
-    ).lower()
+    # Compute novelty score
+    novelty_score, similar_works = await compute_idea_novelty(description)
     
-    # Extract capitalized terms (likely method names)
-    method_pattern = r'\b([A-Z][a-zA-Z]+(?:[A-Z][a-zA-Z]*)*)\b'
-    all_raw = " ".join(p.get("title", "") + " " + p.get("abstract", "")[:500] for p in papers)
-    capitalized = re.findall(method_pattern, all_raw)
-    
-    # Filter to likely method names - exclude common descriptive words
-    common_words = {
-        # Generic words
-        "The", "This", "Our", "We", "They", "These", "However", "While", 
-        "Although", "Furthermore", "Moreover", "Results", "Method", "Approach",
-        "Figure", "Table", "Section", "Abstract", "Introduction", "Related",
-        "Experimental", "Conclusion", "Paper", "Work", "Study", "Analysis",
-        # Descriptive adjectives often capitalized in titles
-        "Scalable", "Efficient", "Fast", "Novel", "Accurate", "Robust",
-        "Simple", "Effective", "Improved", "Better", "New", "High", "Low",
-        "Large", "Small", "Deep", "Wide", "Long", "Short", "Local", "Global",
-        "Sparse", "Dense", "Linear", "Dynamic", "Static", "Adaptive", "Smart",
-        "Training", "Learning", "Inference", "Acceleration", "Attention",
-        "Based", "Free", "Aware", "Guided", "Driven", "Enhanced", "Unified",
-        # Generic ML terms
-        "Model", "Models", "Network", "Networks", "Framework", "System",
-        "Architecture", "Architectures", "Module", "Modules", "Layer", "Layers",
-        "Transformer", "Transformers", "Neural", "Machine", "Data", "Dataset",
-    }
-    methods = [m for m in capitalized if len(m) > 2 and m not in common_words][:8]
-    
-    # Also look for acronyms (all caps, 2-6 chars)
-    acronym_pattern = r'\b([A-Z]{2,6})\b'
-    acronyms = re.findall(acronym_pattern, all_raw)
-    acronym_blacklist = {"GPU", "CPU", "TPU", "RAM", "API", "FPS", "RGB", "NLP", "CV", "ML", "AI", "LLM", "CNN", "RNN", "GNN", "MLP", "SOTA", "FPGA"}
-    valid_acronyms = [a for a in acronyms if a not in acronym_blacklist and len(a) >= 3][:4]
-    
-    # Combine methods and acronyms
-    methods = list(dict.fromkeys(valid_acronyms + methods))[:6]  # Dedupe, acronyms first
-    
-    # Extract key noun phrases from titles
-    titles = [p.get("title", "") for p in papers]
-    title_keywords = []
-    for title in titles:
-        words = title.lower().split()
-        for i, word in enumerate(words):
-            if word in ["for", "via", "using", "with", "in", "on", "to"]:
-                if i > 0:
-                    title_keywords.append(words[i-1])
-                if i < len(words) - 1:
-                    title_keywords.append(words[i+1])
-    
-    # Detect domain from content
-    domain_keywords = {
-        "document reranking": ["rerank", "ranking", "retrieval", "document", "passage"],
-        "information retrieval": ["retrieval", "search", "query", "ir ", "bm25"],
-        "text generation": ["generation", "generative", "llm", "language model"],
-        "question answering": ["qa", "question", "answer", "squad", "reading comprehension"],
-        "reasoning": ["reasoning", "cot", "chain-of-thought", "rationale"],
-        "contrastive learning": ["contrastive", "contrast", "positive", "negative", "pairs"],
-        "knowledge distillation": ["distillation", "distill", "teacher", "student"],
-        "transformer optimization": ["transformer", "attention", "efficient", "sparse"],
-        "tabular learning": ["tabular", "structured", "boosting", "tree", "xgboost", "lightgbm"],
-    }
-    
-    detected_domain = "machine learning"
-    for domain, keywords in domain_keywords.items():
-        if any(kw in all_text for kw in keywords):
-            detected_domain = domain
-            break
-    
-    # Extract specific techniques mentioned
-    technique_keywords = {
-        "contrastive learning": ["contrastive", "positive pair", "negative sample"],
-        "distillation": ["distillation", "teacher-student", "knowledge transfer"],
-        "attention mechanism": ["attention", "self-attention", "cross-attention"],
-        "ranking loss": ["pairwise", "listwise", "margin loss", "ranking loss"],
-        "fine-tuning": ["fine-tune", "finetuning", "adapter", "lora"],
-        "sparse retrieval": ["sparse", "bm25", "tf-idf", "lexical"],
-        "dense retrieval": ["dense", "embedding", "semantic", "neural"],
-    }
-    
-    techniques = []
-    for tech, keywords in technique_keywords.items():
-        if any(kw in all_text for kw in keywords):
-            techniques.append(tech)
-    
-    return {
-        "methods": methods if methods else ["neural approach"],
-        "domain": detected_domain,
-        "techniques": techniques if techniques else ["novel optimization"],
-        "title_keywords": list(set(title_keywords))[:5],
-        "paper_titles": [p.get("title", "")[:60] for p in papers[:3]],
-    }
-
-
-def _create_idea_from_themes(
-    idea_id: str,
-    themes: list[str],
-    papers: list[dict],
-    focus: Optional[str],
-    index: int,
-) -> Idea:
-    """Create a research idea based on ACTUAL paper content."""
-    
-    # Extract actual terms from papers
-    terms = _extract_key_terms(papers)
-    domain = focus or terms["domain"]
-    methods = terms["methods"]
-    techniques = terms["techniques"]
-    paper_titles = terms["paper_titles"]
-    
-    # Use first paper title as inspiration
-    main_paper = paper_titles[0] if paper_titles else "the source papers"
-    
-    # Create genuinely different ideas based on index
-    if index == 0:
-        # Idea 1: Combine two methods from the papers
-        method1 = methods[0] if methods else "the primary method"
-        method2 = methods[1] if len(methods) > 1 else techniques[0] if techniques else "auxiliary approach"
-        
-        title = f"Unified {method1}-{method2} Framework for {domain.title()}"
-        description = (
-            f"Building on insights from '{main_paper}', we propose combining {method1} "
-            f"with {method2} in a unified framework for {domain}. "
-            f"The key insight is that {method1} provides strong representation learning "
-            f"while {method2} enables efficient inference. Our unified approach "
-            f"achieves the benefits of both without their individual limitations."
-        )
-        motivation = (
-            f"Prior work in {domain} either uses {method1} or {method2} separately. "
-            f"We identify complementary strengths and propose a principled integration."
-        )
-        
-    elif index == 1:
-        # Idea 2: Efficiency improvement of main method
-        main_method = methods[0] if methods else "the primary approach"
-        tech = techniques[0] if techniques else "approximation techniques"
-        
-        title = f"Efficient {main_method} via {tech.title()} for Scalable {domain.title()}"
-        description = (
-            f"Inspired by '{main_paper}', we propose an efficient variant of {main_method} "
-            f"that reduces computational overhead through {tech}. "
-            f"While existing {main_method} approaches achieve strong performance, "
-            f"their quadratic complexity limits scalability. Our method maintains "
-            f"competitive accuracy with linear complexity, enabling real-world deployment."
-        )
-        motivation = (
-            f"The computational cost of {main_method} in {domain} limits practical application. "
-            f"We address this by introducing principled {tech} without sacrificing quality."
-        )
-        
-    else:
-        # Idea 3: Novel application or theoretical contribution
-        main_method = methods[0] if methods else "the proposed approach"
-        secondary = methods[1] if len(methods) > 1 else "complementary signals"
-        
-        title = f"{main_method} with {secondary.title()} for Enhanced {domain.title()}"
-        description = (
-            f"Extending ideas from '{main_paper}', we propose using {main_method} "
-            f"enhanced with {secondary} for improved {domain}. "
-            f"Our key contribution is demonstrating that {secondary} provides "
-            f"additional supervision signal that significantly improves {main_method}'s "
-            f"performance on challenging {domain} benchmarks."
-        )
-        motivation = (
-            f"While {main_method} shows promise for {domain}, its performance can be "
-            f"further improved by incorporating {secondary}. We provide theoretical "
-            f"justification and empirical validation of this combination."
-        )
-    
-    filled_title = title
-    filled_description = description
-    filled_motivation = motivation
-    
-    return Idea(
+    idea = Idea(
         idea_id=idea_id,
-        title=filled_title,
-        description=filled_description,
-        source_papers=[p["title"][:50] for p in papers[:3]],
+        title=title,
+        description=description,
+        source_papers=source_papers or [],
         hypotheses=[],
         research_plan={},
-        novelty_score=None,
+        novelty_score=novelty_score,
         created_at=datetime.now().isoformat(),
-        status="pending_approval",  # Requires user approval
-        motivation=filled_motivation,
-        themes=themes,
-        confirmation_code=_generate_confirmation_code(),  # Code required for approval
+        status="pending_approval",
+        motivation=motivation,
+        themes=_extract_themes(title + " " + description),
+        similar_works=similar_works,
+        confirmation_code=confirmation_code,
     )
+    
+    await experiments_db.save_idea(idea)
+    
+    star_rating = "★" * int(novelty_score * 5) + "☆" * (5 - int(novelty_score * 5))
+    
+    return json.dumps({
+        "success": True,
+        "idea_submitted": {
+            "idea_id": idea_id,
+            "title": title,
+            "novelty_score": round(novelty_score, 3),
+            "novelty_rating": star_rating,
+            "similar_works": similar_works,
+        },
+        "status": "AWAITING_USER_APPROVAL",
+        "approval_command": f"APPROVE {idea_id} CODE {confirmation_code}",
+        "message": (
+            f"Idea '{title}' submitted with novelty score {novelty_score:.2f}.\n"
+            "USER must type the approval command to proceed."
+        ),
+        "ai_instruction": "Continue submitting more ideas or wait for user approval.",
+    }, indent=2)
 
 
-def _extract_domain(papers: list[dict]) -> str:
-    """Extract the research domain from papers."""
-    domains = {
-        "nlp": ["language", "text", "nlp", "translation", "sentiment"],
-        "vision": ["image", "vision", "visual", "object", "detection"],
-        "ml": ["learning", "neural", "model", "training", "optimization"],
-        "tabular": ["tabular", "structured", "boosting", "tree", "ensemble"],
-    }
+def _extract_themes(text: str) -> list[str]:
+    """Extract key research themes from text using simple heuristics."""
+    text_lower = text.lower()
+    themes = []
     
-    all_text = " ".join(p.get("title", "") + " " + p.get("abstract", "") for p in papers).lower()
+    if any(w in text_lower for w in ["efficien", "fast", "speed", "acceler"]):
+        themes.append("efficiency")
+    if any(w in text_lower for w in ["scal", "large", "distributed"]):
+        themes.append("scalability")
+    if any(w in text_lower for w in ["accura", "performance", "state-of-the-art"]):
+        themes.append("accuracy")
+    if any(w in text_lower for w in ["attention", "transformer"]):
+        themes.append("attention")
+    if any(w in text_lower for w in ["sparse", "pruning"]):
+        themes.append("sparsity")
     
-    for domain, keywords in domains.items():
-        if any(kw in all_text for kw in keywords):
-            return domain
-    
-    return "machine learning"
+    return themes if themes else ["novel_method"]
+
+
 
 
 async def approve_idea(

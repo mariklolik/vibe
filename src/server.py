@@ -20,6 +20,7 @@ from src.tools.aggregation import (
 # Ideas generation and verification
 from src.tools.ideas import (
     generate_ideas,
+    submit_idea,
     approve_idea,
     reject_idea,
     check_novelty,
@@ -200,6 +201,7 @@ TOOL_HANDLERS = {
     
     # Ideas
     "generate_ideas": generate_ideas,
+    "submit_idea": submit_idea,
     "approve_idea": approve_idea,
     "reject_idea": reject_idea,
     "check_novelty": check_novelty,
@@ -357,9 +359,9 @@ TOOLS = [
     Tool(
         name="generate_ideas",
         description=(
-            "Generate research ideas based on papers. "
-            "IMPORTANT: After calling this, STOP and wait for user to approve an idea. "
-            "Do NOT call approve_idea automatically - the user must type the approval command."
+            "Get paper context for idea generation. "
+            "Returns full abstracts from papers. After calling this, "
+            "read the papers and call submit_idea() for each creative idea you generate."
         ),
         inputSchema={
             "type": "object",
@@ -369,6 +371,24 @@ TOOLS = [
                 "focus": {"type": "string"},
             },
             "required": ["paper_ids"],
+        },
+    ),
+    Tool(
+        name="submit_idea",
+        description=(
+            "Submit a research idea for user approval. "
+            "Call this after generate_ideas() returns paper context. "
+            "Generate creative, specific ideas based on the paper content."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Clear, specific title"},
+                "description": {"type": "string", "description": "Detailed description (2-3 paragraphs)"},
+                "motivation": {"type": "string", "description": "Why this is novel"},
+                "source_papers": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["title", "description", "motivation"],
         },
     ),
     Tool(
