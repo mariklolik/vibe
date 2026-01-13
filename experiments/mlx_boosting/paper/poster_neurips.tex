@@ -1,0 +1,46 @@
+% Research Poster
+\documentclass[final,hyperref={pdfpagelabels=false}]{beamer}
+\usepackage[orientation=portrait,size=a0,scale=1.4]{beamerposter}
+\usetheme{confposter}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usepackage{pgfplots}
+
+\title{MLX-Boost: Gradient Boosting on Apple Silicon}
+\author{Anonymous Author}
+\institute{Anonymous Institution}
+
+\begin{document}
+\begin{frame}[t]
+
+\begin{columns}[t]
+
+\begin{column}{.48\linewidth}
+
+\begin{block}{Introduction}
+Gradient boosting is highly effective for tabular data but existing implementations (XGBoost, LightGBM) target CUDA GPUs. We implement gradient boosting on Apple's MLX framework for Apple Silicon users.
+\end{block}
+
+\begin{block}{Method}
+Decision trees with variance reduction splitting. Iterative ensemble construction fitting trees to residuals. MLX used for vectorized residual computation.
+\end{block}
+
+\end{column}
+
+\begin{column}{.48\linewidth}
+
+\begin{block}{Results}
+California Housing Dataset:\n- sklearn: R² = 0.778\n- XGBoost: R² = 0.770\n- LightGBM: R² = 0.777\n- MLX-Boost: R² = 0.758 (97.4% of sklearn)
+\end{block}
+
+\begin{block}{Conclusion}
+MLX-Boost demonstrates viability of MLX for traditional ML algorithms. Future: GPU acceleration, histogram splitting.
+\end{block}
+
+\end{column}
+
+\end{columns}
+
+\end{frame}
+\end{document}

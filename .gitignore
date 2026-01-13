@@ -1,0 +1,59 @@
+# Virtual environments
+.venv/
+.venvs/
+venv/
+env/
+*.egg-info/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files (large)
+data/*.csv
+data/*.parquet
+data/*.pkl
+data/*.h5
+data/*.hdf5
+data/*.npy
+data/*.npz
+
+# Model checkpoints
+checkpoints/*.pt
+checkpoints/*.pth
+checkpoints/*.ckpt
+checkpoints/*.safetensors
+checkpoints/*.bin
+
+# Logs
+*.log
+logs/
+
+# Cache
+.cache/
+*.db
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Keep project structure but ignore data
+projects/*/data/*
+!projects/*/data/.gitkeep

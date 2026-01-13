@@ -1,0 +1,96 @@
+{
+  "styles": {
+    "neurips": {
+      "figure_width_single": 3.25,
+      "figure_width_double": 6.75,
+      "dpi": 300,
+      "formats": ["pdf", "png"],
+      "font_size_min": 8,
+      "font_family": "serif",
+      "colors": {
+        "primary": "#1f77b4",
+        "secondary": "#ff7f0e",
+        "accent": "#2ca02c",
+        "palette": ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+      },
+      "line_width": 1.5,
+      "marker_size": 6,
+      "grid_alpha": 0.3,
+      "legend_location": "best"
+    },
+    "icml": {
+      "figure_width_single": 3.25,
+      "figure_width_double": 6.75,
+      "dpi": 300,
+      "formats": ["pdf", "eps"],
+      "font_size_min": 8,
+      "font_family": "serif",
+      "colors": {
+        "primary": "#0072B2",
+        "secondary": "#E69F00",
+        "accent": "#009E73",
+        "palette": ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#F0E442", "#56B4E9"]
+      },
+      "line_width": 1.5,
+      "marker_size": 6,
+      "grid_alpha": 0.3,
+      "legend_location": "best"
+    },
+    "cvpr": {
+      "figure_width_single": 3.25,
+      "figure_width_double": 6.875,
+      "dpi": 300,
+      "formats": ["pdf", "eps", "png"],
+      "font_size_min": 6,
+      "font_family": "serif",
+      "colors": {
+        "primary": "#4477AA",
+        "secondary": "#EE6677",
+        "accent": "#228833",
+        "palette": ["#4477AA", "#EE6677", "#228833", "#CCBB44", "#66CCEE", "#AA3377"]
+      },
+      "line_width": 1.5,
+      "marker_size": 5,
+      "grid_alpha": 0.3,
+      "legend_location": "upper right"
+    },
+    "acl": {
+      "figure_width_single": 3.0,
+      "figure_width_double": 6.5,
+      "dpi": 300,
+      "formats": ["pdf", "png"],
+      "font_size_min": 8,
+      "font_family": "serif",
+      "colors": {
+        "primary": "#332288",
+        "secondary": "#88CCEE",
+        "accent": "#117733",
+        "palette": ["#332288", "#88CCEE", "#117733", "#DDCC77", "#CC6677", "#882255"]
+      },
+      "line_width": 1.5,
+      "marker_size": 6,
+      "grid_alpha": 0.3,
+      "legend_location": "best"
+    },
+    "colorblind_safe": {
+      "description": "Color-blind friendly palette",
+      "palette": ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#F0E442", "#56B4E9", "#D55E00", "#000000"]
+    },
+    "grayscale": {
+      "description": "Grayscale for print",
+      "palette": ["#000000", "#404040", "#808080", "#A0A0A0", "#C0C0C0", "#E0E0E0"]
+    }
+  },
+  "table_styles": {
+    "default": {
+      "header_style": "bold",
+      "separator": "booktabs",
+      "alignment": "center",
+      "best_highlight": "bold"
+    }
+  },
+  "metadata": {
+    "last_updated": "2026-01-13",
+    "version": "1.0.0"
+  }
+}

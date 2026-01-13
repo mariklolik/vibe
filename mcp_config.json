@@ -1,0 +1,8 @@
+{
+  "name": "research-mcp",
+  "version": "0.1.0",
+  "description": "End-to-end AI research pipeline MCP server",
+  "command": "/Users/mekashirskiy/yandexcup/vpn/research-mcp/.venv/bin/python",
+  "args": ["-m", "src.server"],
+  "cwd": "/Users/mekashirskiy/yandexcup/vpn/research-mcp"
+}

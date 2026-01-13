@@ -1,0 +1,307 @@
+"""Workflow orchestration tools - guide the agent through required steps."""
+
+import json
+from typing import Optional
+
+from src.db.workflow import workflow_db, WorkflowState
+from src.db.experiments_db import experiments_db
+from src.project.manager import project_manager
+
+
+# Stage definitions with required completions and next actions
+WORKFLOW_STAGES = {
+    "context_gathering": {
+        "description": "Gather relevant papers and extract context",
+        "required_tools": ["fetch_arxiv_trending", "fetch_hf_trending", "search_papers"],
+        "completion_check": lambda w: len(w.gathered_papers) >= 3,
+        "next_stage": "idea_generation",
+    },
+    "idea_generation": {
+        "description": "Generate research ideas from gathered context",
+        "required_tools": ["generate_ideas"],
+        "completion_check": lambda w: len(w.generated_ideas) > 0,
+        "next_stage": "idea_approval",
+    },
+    "idea_approval": {
+        "description": "BLOCKED - Waiting for user to approve an idea",
+        "required_tools": [],  # User must manually approve
+        "completion_check": lambda w: w.approved_idea_id is not None,
+        "next_stage": "experiment_setup",
+        "is_blocking": True,
+    },
+    "experiment_setup": {
+        "description": "Set up experiment environment and datasets",
+        "required_tools": ["create_experiment_env", "setup_datasets", "define_hypotheses"],
+        "completion_check": lambda w: (
+            "env_created" in w.completed_steps and 
+            "datasets_setup" in w.completed_steps
+        ),
+        "next_stage": "experimenting",
+    },
+    "experimenting": {
+        "description": "Run experiments and collect data",
+        "required_tools": ["run_experiment", "run_baseline", "collect_metrics"],
+        "completion_check": lambda w: len(w.completed_experiments) > 0,
+        "next_stage": "analysis",
+    },
+    "analysis": {
+        "description": "Analyze results and generate visualizations",
+        "required_tools": [
+            "compute_statistics",
+            "check_significance",
+            "plot_comparison_bar",
+            "plot_training_curves",
+            "compare_to_baselines",
+        ],
+        "completion_check": lambda w: len(w.figures_generated) >= 2,
+        "next_stage": "writing",
+    },
+    "writing": {
+        "description": "Write the paper with proper formatting",
+        "required_tools": [
+            "estimate_paper_structure",
+            "format_results_table",
+            "get_citations_for_topic",
+            "create_paper_skeleton",
+        ],
+        "completion_check": lambda w: len(w.paper_sections) >= 3,
+        "next_stage": "formatting",
+    },
+    "formatting": {
+        "description": "Format paper for conference submission",
+        "required_tools": ["cast_to_format", "compile_paper"],
+        "completion_check": lambda w: w.target_conference is not None,
+        "next_stage": "complete",
+    },
+}
+
+
+async def get_next_action() -> str:
+    """
+    Get the next required action based on current workflow state.
+    
+    ALWAYS call this before taking any action to ensure proper workflow progression.
+    This tool guides you through all required steps and prevents skipping.
+    
+    Returns the current stage, what's been completed, and what must be done next.
+    """
+    # Get current project and workflow
+    current_project_obj = await project_manager.get_current_project()
+    if not current_project_obj:
+        return json.dumps({
+            "status": "NO_PROJECT",
+            "error": "No project is currently active",
+            "action_required": "Call create_project(name) first",
+            "example": "create_project(name='my_research')",
+        }, indent=2)
+    
+    current_project_id = current_project_obj.project_id
+    workflow = await workflow_db.get_project_workflow(current_project_id)
+    if not workflow:
+        return json.dumps({
+            "status": "NO_WORKFLOW",
+            "error": "No workflow exists for this project",
+            "action_required": "Call create_workflow(project_id) first",
+            "example": f"create_workflow(project_id='{current_project_id}')",
+        }, indent=2)
+    
+    current_stage = workflow.stage
+    stage_info = WORKFLOW_STAGES.get(current_stage, {})
+    
+    # Check if current stage is blocking (requires user action)
+    if stage_info.get("is_blocking"):
+        return json.dumps({
+            "status": "BLOCKED",
+            "stage": current_stage,
+            "description": stage_info.get("description", ""),
+            "reason": "This stage requires human user action",
+            "user_action_required": _get_user_action_instruction(workflow, current_stage),
+            "ai_instruction": (
+                "STOP HERE. Do NOT proceed with any other tools. "
+                "Wait for the user to complete the required action."
+            ),
+            "do_not_proceed": True,
+        }, indent=2)
+    
+    # Check stage completion
+    completion_check = stage_info.get("completion_check", lambda w: False)
+    is_complete = completion_check(workflow)
+    
+    if is_complete:
+        # Advance to next stage
+        next_stage = stage_info.get("next_stage", current_stage)
+        workflow.stage = next_stage
+        await workflow_db.save_workflow(workflow)
+        
+        return await get_next_action()  # Recurse to get next stage info
+    
+    # Current stage not complete - return required actions
+    required_tools = stage_info.get("required_tools", [])
+    completed_tools = _get_completed_tools(workflow, required_tools)
+    missing_tools = [t for t in required_tools if t not in completed_tools]
+    
+    return json.dumps({
+        "status": "IN_PROGRESS",
+        "stage": current_stage,
+        "stage_description": stage_info.get("description", ""),
+        "progress": {
+            "completed": completed_tools,
+            "remaining": missing_tools,
+        },
+        "next_action": {
+            "tool": missing_tools[0] if missing_tools else None,
+            "description": _get_tool_description(missing_tools[0]) if missing_tools else "Stage complete",
+        },
+        "workflow_summary": {
+            "papers_gathered": len(workflow.gathered_papers),
+            "contexts_extracted": len(workflow.extracted_contexts),
+            "ideas_generated": len(workflow.generated_ideas),
+            "idea_approved": workflow.approved_idea_id is not None,
+            "experiments_completed": len(workflow.completed_experiments),
+            "figures_generated": len(workflow.figures_generated),
+        },
+    }, indent=2)
+
+
+def _get_user_action_instruction(workflow: WorkflowState, stage: str) -> str:
+    """Get specific instruction for user action required."""
+    if stage == "idea_approval":
+        if workflow.generated_ideas:
+            return (
+                f"User must approve one of the generated ideas. "
+                f"Type: APPROVE <idea_id> CODE <confirmation_code>"
+            )
+        return "Generate ideas first with generate_ideas()"
+    return "User action required"
+
+
+def _get_completed_tools(workflow: WorkflowState, required_tools: list[str]) -> list[str]:
+    """Determine which required tools have been completed based on workflow state."""
+    completed = []
+    
+    for tool in required_tools:
+        if tool in ["fetch_arxiv_trending", "fetch_hf_trending", "search_papers"]:
+            if len(workflow.gathered_papers) > 0:
+                completed.append(tool)
+        elif tool == "generate_ideas":
+            if len(workflow.generated_ideas) > 0:
+                completed.append(tool)
+        elif tool == "create_experiment_env":
+            if "env_created" in workflow.completed_steps:
+                completed.append(tool)
+        elif tool == "setup_datasets":
+            if "datasets_setup" in workflow.completed_steps:
+                completed.append(tool)
+        elif tool == "define_hypotheses":
+            if workflow.hypotheses:
+                completed.append(tool)
+        elif tool == "run_experiment":
+            if len(workflow.completed_experiments) > 0:
+                completed.append(tool)
+        elif tool in ["plot_comparison_bar", "plot_training_curves"]:
+            if len(workflow.figures_generated) > 0:
+                completed.append(tool)
+        elif tool in ["compute_statistics", "check_significance", "compare_to_baselines"]:
+            if workflow.experiment_results:
+                completed.append(tool)
+    
+    return completed
+
+
+def _get_tool_description(tool_name: str) -> str:
+    """Get a brief description of what a tool does."""
+    descriptions = {
+        "fetch_arxiv_trending": "Fetch trending papers from arXiv",
+        "fetch_hf_trending": "Fetch trending papers from HuggingFace",
+        "search_papers": "Search for papers by topic",
+        "generate_ideas": "Generate research ideas from papers",
+        "create_experiment_env": "Create Python environment for experiments",
+        "setup_datasets": "Download and prepare datasets",
+        "define_hypotheses": "Define testable hypotheses",
+        "run_experiment": "Run an experiment script",
+        "run_baseline": "Run baseline comparison",
+        "collect_metrics": "Collect metrics from experiment logs",
+        "compute_statistics": "Compute statistical measures on results",
+        "check_significance": "Run statistical significance tests",
+        "plot_comparison_bar": "Generate comparison bar chart",
+        "plot_training_curves": "Generate training curves plot",
+        "compare_to_baselines": "Compare method to baselines",
+        "estimate_paper_structure": "Estimate paper word/figure counts",
+        "format_results_table": "Format results as LaTeX table",
+        "get_citations_for_topic": "Get relevant citations",
+        "create_paper_skeleton": "Create paper LaTeX structure",
+        "cast_to_format": "Convert paper to conference format",
+        "compile_paper": "Compile LaTeX to PDF",
+    }
+    return descriptions.get(tool_name, f"Execute {tool_name}")
+
+
+async def mark_step_complete(step_name: str) -> str:
+    """
+    Mark a workflow step as complete.
+    
+    This is called internally by tools when they successfully complete.
+    Users and AI should not need to call this directly.
+    """
+    current_project_obj = await project_manager.get_current_project()
+    if not current_project_obj:
+        return json.dumps({"error": "No active project"})
+    
+    workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
+    if not workflow:
+        return json.dumps({"error": "No workflow found"})
+    
+    if step_name not in workflow.completed_steps:
+        workflow.completed_steps.append(step_name)
+    
+    await workflow_db.save_workflow(workflow)
+    
+    return json.dumps({
+        "success": True,
+        "step_completed": step_name,
+        "total_completed": len(workflow.completed_steps),
+    })
+
+
+async def get_workflow_checklist() -> str:
+    """
+    Get a complete checklist of all workflow stages and their status.
+    
+    Useful for understanding overall progress and what remains to be done.
+    """
+    current_project_obj = await project_manager.get_current_project()
+    if not current_project_obj:
+        return json.dumps({"error": "No active project"})
+    
+    workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
+    if not workflow:
+        return json.dumps({"error": "No workflow found"})
+    
+    checklist = []
+    current_found = False
+    
+    for stage_name, stage_info in WORKFLOW_STAGES.items():
+        completion_check = stage_info.get("completion_check", lambda w: False)
+        is_complete = completion_check(workflow)
+        
+        if stage_name == workflow.stage:
+            current_found = True
+            status = "IN_PROGRESS" if not is_complete else "COMPLETE"
+        elif not current_found:
+            status = "COMPLETE" if is_complete else "SKIPPED"
+        else:
+            status = "PENDING"
+        
+        checklist.append({
+            "stage": stage_name,
+            "description": stage_info.get("description", ""),
+            "status": status,
+            "required_tools": stage_info.get("required_tools", []),
+            "is_blocking": stage_info.get("is_blocking", False),
+        })
+    
+    return json.dumps({
+        "project": current_project,
+        "current_stage": workflow.stage,
+        "checklist": checklist,
+    }, indent=2)
