@@ -334,8 +334,14 @@ async def _execute_tool(name: str, args: dict) -> str:
         )
     
     elif name == "format_results_table":
+        results = args["results"]
+        if isinstance(results, str):
+            try:
+                results = json.loads(results)
+            except json.JSONDecodeError:
+                return json.dumps({"error": "results must be a valid JSON object"})
         return await format_results_table(
-            args["results"],
+            results,
             args["metrics"],
             args.get("caption"),
         )
@@ -361,8 +367,17 @@ async def _execute_tool(name: str, args: dict) -> str:
         return await get_conference_requirements(args["conference"])
     
     elif name == "cast_to_format":
+        content = args.get("content")
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except json.JSONDecodeError:
+                return json.dumps({
+                    "error": "content must be a valid JSON object, not a string",
+                    "received": content[:100] if len(content) > 100 else content,
+                })
         return await cast_to_format(
-            args.get("content"),
+            content,
             args.get("format_name", "icml"),
             args.get("output_dir", "./output"),
         )
