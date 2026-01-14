@@ -44,7 +44,14 @@ from src.tools.formatting import (
     list_conferences,
     get_conference_requirements,
 )
-from src.context.extractor import extract_paper_context
+from src.context.extractor import (
+    extract_paper_context,
+    extract_paper_metrics,
+    extract_metrics_from_papers,
+    extract_writing_style_context,
+    get_paper_context_for_writing,
+    PaperMetrics,
+)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -73,6 +80,52 @@ TOOL_DEFINITIONS = [
         name="extract_style_from_context",
         description="Analyze gathered papers to extract writing style patterns.",
         inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="extract_paper_metrics",
+        description="Extract figures/tables/formulas/word counts per section from a specific paper. Use to understand paper structure.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "arxiv_id": {"type": "string", "description": "arXiv ID (e.g., 2401.12345)"},
+            },
+            "required": ["arxiv_id"],
+        },
+    ),
+    Tool(
+        name="extract_target_metrics",
+        description="IMPORTANT: Extract and average metrics from ALL gathered papers. Returns target word counts, figure counts, table counts per section. Call this FIRST before writing.",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="extract_writing_style",
+        description="IMPORTANT: Extract writing style from gathered papers. Returns sentence length, voice (passive/active), formality, AND example paragraphs to match. Call this BEFORE writing each section.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "paper_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional: specific paper IDs to analyze. If empty, uses all gathered papers.",
+                },
+            },
+            "required": [],
+        },
+    ),
+    Tool(
+        name="get_full_writing_context",
+        description="Get COMPLETE writing context: metrics + style + example paragraphs from gathered papers. Call this once before starting to write the paper.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "paper_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional: specific paper IDs. If empty, uses all gathered papers.",
+                },
+            },
+            "required": [],
+        },
     ),
     Tool(
         name="estimate_paper_structure",
@@ -254,6 +307,18 @@ async def _execute_tool(name: str, args: dict) -> str:
     elif name == "extract_style_from_context":
         return await extract_style_from_context()
     
+    elif name == "extract_paper_metrics":
+        return await _extract_paper_metrics(args["arxiv_id"])
+    
+    elif name == "extract_target_metrics":
+        return await _extract_target_metrics()
+    
+    elif name == "extract_writing_style":
+        return await _extract_writing_style(args.get("paper_ids", []))
+    
+    elif name == "get_full_writing_context":
+        return await _get_full_writing_context(args.get("paper_ids", []))
+    
     elif name == "estimate_paper_structure":
         return await estimate_paper_structure(
             args.get("target_pages", 9),
@@ -321,6 +386,174 @@ async def _execute_tool(name: str, args: dict) -> str:
     
     else:
         return json.dumps({"error": f"Unknown tool: {name}"})
+
+
+async def _extract_paper_metrics(arxiv_id: str) -> str:
+    """Extract metrics from a single paper."""
+    metrics = await extract_paper_metrics(arxiv_id)
+    return json.dumps({
+        "arxiv_id": arxiv_id,
+        "metrics": metrics.to_dict(),
+        "usage": "Use these as reference for your paper structure",
+    }, indent=2)
+
+
+async def _extract_target_metrics() -> str:
+    """Extract and average metrics from all gathered papers."""
+    current_project = await project_manager.get_current_project()
+    if not current_project:
+        return json.dumps({"error": "No active project"})
+    
+    context_dir = current_project.context_dir
+    if not context_dir.exists():
+        return json.dumps({"error": "No papers gathered yet"})
+    
+    arxiv_ids = []
+    for context_file in context_dir.glob("*.json"):
+        try:
+            paper_data = json.loads(context_file.read_text())
+            arxiv_id = paper_data.get("arxiv_id")
+            if arxiv_id:
+                arxiv_ids.append(arxiv_id)
+        except Exception:
+            continue
+    
+    if not arxiv_ids:
+        return json.dumps({
+            "error": "No arXiv papers in context",
+            "default": PaperMetrics.default().to_dict(),
+        })
+    
+    metrics = await extract_metrics_from_papers(arxiv_ids)
+    
+    # Store in workflow for reference
+    workflow = await workflow_db.get_project_workflow(current_project.project_id)
+    if workflow:
+        workflow.target_metrics = metrics.to_dict()
+        await workflow_db.save_workflow(workflow)
+    
+    return json.dumps({
+        "papers_analyzed": len(arxiv_ids),
+        "target_metrics": metrics.to_dict(),
+        "recommendations": {
+            "total_words": f"~{metrics.word_count} words",
+            "figures": f"{metrics.figure_count} figures",
+            "tables": f"{metrics.table_count} tables",
+            "citations": f"~{metrics.citation_count} citations",
+            "pages": f"~{metrics.page_count} pages",
+        },
+        "section_targets": metrics.section_lengths,
+        "usage": "Match these metrics when writing your paper",
+    }, indent=2)
+
+
+async def _extract_writing_style(paper_ids: list[str]) -> str:
+    """Extract writing style from papers."""
+    current_project = await project_manager.get_current_project()
+    if not current_project:
+        return json.dumps({"error": "No active project"})
+    
+    arxiv_ids = []
+    
+    if paper_ids:
+        for pid in paper_ids:
+            if pid.startswith("arxiv:"):
+                arxiv_ids.append(pid[6:])
+            else:
+                arxiv_ids.append(pid)
+    else:
+        context_dir = current_project.context_dir
+        if context_dir.exists():
+            for context_file in context_dir.glob("*.json"):
+                try:
+                    paper_data = json.loads(context_file.read_text())
+                    arxiv_id = paper_data.get("arxiv_id")
+                    if arxiv_id:
+                        arxiv_ids.append(arxiv_id)
+                except Exception:
+                    continue
+    
+    if not arxiv_ids:
+        return json.dumps({
+            "error": "No papers to analyze",
+            "default_style": {
+                "avg_sentence_length": 20,
+                "passive_voice_ratio": 0.3,
+                "first_person": True,
+                "formality": "high",
+            },
+        })
+    
+    style_context = await extract_writing_style_context(arxiv_ids[:5])
+    
+    return json.dumps({
+        "style_context": style_context,
+        "usage": (
+            "MATCH THIS STYLE when writing:\n"
+            "1. Use similar sentence length\n"
+            "2. Match the voice (we/passive)\n"
+            "3. Match formality level\n"
+            "4. Study the example paragraphs below and COPY their style"
+        ),
+    }, indent=2, ensure_ascii=False)
+
+
+async def _get_full_writing_context(paper_ids: list[str]) -> str:
+    """Get complete writing context: metrics + style + examples."""
+    current_project = await project_manager.get_current_project()
+    if not current_project:
+        return json.dumps({"error": "No active project"})
+    
+    arxiv_ids = []
+    
+    if paper_ids:
+        for pid in paper_ids:
+            if pid.startswith("arxiv:"):
+                arxiv_ids.append(pid[6:])
+            else:
+                arxiv_ids.append(pid)
+    else:
+        context_dir = current_project.context_dir
+        if context_dir.exists():
+            for context_file in context_dir.glob("*.json"):
+                try:
+                    paper_data = json.loads(context_file.read_text())
+                    arxiv_id = paper_data.get("arxiv_id")
+                    if arxiv_id:
+                        arxiv_ids.append(arxiv_id)
+                except Exception:
+                    continue
+    
+    if not arxiv_ids:
+        return json.dumps({
+            "error": "No papers in context",
+            "message": "Gather papers first using researcher-mcp",
+        })
+    
+    context = await get_paper_context_for_writing(arxiv_ids[:5])
+    
+    # Store target metrics in workflow
+    workflow = await workflow_db.get_project_workflow(current_project.project_id)
+    if workflow and context.get("target_metrics"):
+        workflow.target_metrics = context["target_metrics"]
+        await workflow_db.save_workflow(workflow)
+    
+    return json.dumps({
+        "papers_analyzed": len(arxiv_ids),
+        "full_context": context,
+        "instructions": (
+            "USE THIS CONTEXT TO WRITE YOUR PAPER:\n\n"
+            "1. METRICS - Match these targets:\n"
+            f"   - Word count: {context.get('target_metrics', {}).get('word_count', 5000)}\n"
+            f"   - Figures: {context.get('target_metrics', {}).get('figure_count', 6)}\n"
+            f"   - Tables: {context.get('target_metrics', {}).get('table_count', 3)}\n\n"
+            "2. STYLE - Match the writing style:\n"
+            "   - Study the example paragraphs\n"
+            "   - Match sentence length and formality\n"
+            "   - Use similar voice (we/passive)\n\n"
+            "3. STRUCTURE - Follow section word counts from reference papers"
+        ),
+    }, indent=2, ensure_ascii=False)
 
 
 async def _get_status() -> str:
