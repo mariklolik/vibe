@@ -231,15 +231,34 @@ class PersonaManager:
         """Clear manual persona override."""
         self._override_persona = None
     
-    def get_active_persona(self, workflow_stage: str) -> Persona:
-        """Get active persona based on workflow stage or override."""
+    def sync_from_workflow(self, workflow_persona: Optional[str]) -> None:
+        """Sync persona from workflow database (call on startup/tool calls)."""
+        if workflow_persona:
+            try:
+                self._override_persona = PersonaType(workflow_persona.lower())
+            except ValueError:
+                pass
+    
+    def get_active_persona(self, workflow_stage: str, workflow_persona: Optional[str] = None) -> Persona:
+        """Get active persona based on workflow stage or override.
+        
+        Priority: 1) in-memory override, 2) workflow DB persona, 3) stage-based default
+        """
         if self._override_persona:
             return PERSONAS[self._override_persona]
+        
+        if workflow_persona:
+            try:
+                persona_type = PersonaType(workflow_persona.lower())
+                return PERSONAS[persona_type]
+            except ValueError:
+                pass
+        
         return get_persona_for_stage(workflow_stage)
     
-    def get_active_tools(self, workflow_stage: str, all_tools: list) -> list:
+    def get_active_tools(self, workflow_stage: str, all_tools: list, workflow_persona: Optional[str] = None) -> list:
         """Get filtered tools for the active persona."""
-        persona = self.get_active_persona(workflow_stage)
+        persona = self.get_active_persona(workflow_stage, workflow_persona)
         return filter_tools_by_persona(all_tools, persona.name)
 
 

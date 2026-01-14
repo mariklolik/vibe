@@ -405,16 +405,19 @@ async def get_active_persona() -> str:
     current_project_obj = await project_manager.get_current_project()
     
     workflow_stage = "context_gathering"
+    workflow_persona = None
     if current_project_obj:
         workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
         if workflow:
             workflow_stage = workflow.stage
+            workflow_persona = workflow.current_persona
     
-    active_persona = persona_manager.get_active_persona(workflow_stage)
+    active_persona = persona_manager.get_active_persona(workflow_stage, workflow_persona)
     
     return json.dumps({
         "active_persona": active_persona.name.value,
         "workflow_stage": workflow_stage,
+        "persisted_persona": workflow_persona,
         "description": active_persona.description,
         "available_tools": active_persona.tools,
         "tool_count": len(active_persona.tools),
@@ -1774,17 +1777,26 @@ CORE_TOOLS = [
 ]
 
 
-async def get_current_workflow_stage() -> str:
-    """Get the current workflow stage for persona filtering."""
+async def get_current_workflow_info() -> tuple[str, str]:
+    """Get the current workflow stage and persona for filtering.
+    
+    Returns (stage, persona)
+    """
     current_project_obj = await project_manager.get_current_project()
     if not current_project_obj:
-        return "context_gathering"
+        return "context_gathering", "researcher"
     
     workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
     if not workflow:
-        return "context_gathering"
+        return "context_gathering", "researcher"
     
-    return workflow.stage
+    return workflow.stage, workflow.current_persona or "researcher"
+
+
+async def get_current_workflow_stage() -> str:
+    """Get the current workflow stage for persona filtering."""
+    stage, _ = await get_current_workflow_info()
+    return stage
 
 
 @server.list_tools()
@@ -1796,8 +1808,8 @@ async def list_tools() -> list[Tool]:
     workflow stage. Core tools (workflow management, persona switching) are
     always available.
     """
-    workflow_stage = await get_current_workflow_stage()
-    active_persona = persona_manager.get_active_persona(workflow_stage)
+    workflow_stage, workflow_persona = await get_current_workflow_info()
+    active_persona = persona_manager.get_active_persona(workflow_stage, workflow_persona)
     
     allowed_tool_names = set(active_persona.tools) | set(CORE_TOOLS)
     
