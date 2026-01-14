@@ -225,7 +225,8 @@ async def get_verified_claims_for_writing() -> str:
     
     claims = []
     for hypo_id, record in verified.items():
-        if record.get("can_claim", False) and record.get("verified_from_logs", False):
+        # Accept claims that are either can_claim=True OR have significant=True
+        if record.get("can_claim", False) or record.get("significant", False):
             claims.append({
                 "hypothesis_id": hypo_id,
                 "statement": record.get("statement", ""),

@@ -51,13 +51,33 @@ def generate_neurips_paper(content: dict) -> str:
         if author.get("email"):
             authors_tex += f" \\\\ \\texttt{{{author['email']}}}"
     
-    # Build sections
+    # Build sections with \section{} headers
     sections_tex = ""
     for section in content.get("sections", []):
         if isinstance(section, dict):
-            sections_tex += section.get("content", "") + "\n\n"
+            section_name = section.get("name", section.get("title", ""))
+            section_content = section.get("content", "")
+            if section_name:
+                sections_tex += f"\\section{{{section_name}}}\n\\label{{sec:{section_name.lower().replace(' ', '_')}}}\n\n"
+            sections_tex += section_content + "\n\n"
         else:
             sections_tex += str(section) + "\n\n"
+    
+    # Build figures
+    for fig in content.get("figures", []):
+        if isinstance(fig, dict):
+            fig_path = fig.get("path", "")
+            fig_caption = fig.get("caption", "")
+            fig_label = fig.get("label", f"fig:{fig_path.split('/')[-1].split('.')[0] if fig_path else 'figure'}")
+            sections_tex += f"""
+\\begin{{figure}}[t]
+\\centering
+\\includegraphics[width=\\linewidth]{{{fig_path}}}
+\\caption{{{fig_caption}}}
+\\label{{{fig_label}}}
+\\end{{figure}}
+
+"""
     
     appendix_tex = content.get("appendix", "")
     appendix_section = ""
@@ -143,13 +163,37 @@ def generate_icml_paper(content: dict) -> str:
     # Corresponding author
     corr = content.get("corresponding_author", authors_list[0] if authors_list else {"name": "Author", "email": "email@inst.edu"})
     
-    # Build sections
+    # Build sections with \section{} headers
     sections_tex = ""
     for section in content.get("sections", []):
         if isinstance(section, dict):
-            sections_tex += section.get("content", "") + "\n\n"
+            section_name = section.get("name", section.get("title", ""))
+            section_content = section.get("content", "")
+            if section_name:
+                sections_tex += f"\\section{{{section_name}}}\n\\label{{sec:{section_name.lower().replace(' ', '_')}}}\n\n"
+            sections_tex += section_content + "\n\n"
         else:
             sections_tex += str(section) + "\n\n"
+    
+    # Build figures
+    figures_tex = ""
+    for fig in content.get("figures", []):
+        if isinstance(fig, dict):
+            fig_path = fig.get("path", "")
+            fig_caption = fig.get("caption", "")
+            fig_label = fig.get("label", f"fig:{fig_path.split('/')[-1].split('.')[0] if fig_path else 'figure'}")
+            figures_tex += f"""
+\\begin{{figure}}[t]
+\\centering
+\\includegraphics[width=\\linewidth]{{{fig_path}}}
+\\caption{{{fig_caption}}}
+\\label{{{fig_label}}}
+\\end{{figure}}
+
+"""
+    
+    # Append figures to sections
+    sections_tex += figures_tex
     
     keywords_str = ", ".join(keywords)
     

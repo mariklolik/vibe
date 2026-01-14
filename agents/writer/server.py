@@ -383,11 +383,17 @@ async def _execute_tool(name: str, args: dict) -> str:
     elif name == "check_paper_completeness":
         current_project = await project_manager.get_current_project()
         if current_project:
-            draft_path = Path(current_project.root_path) / "papers" / "drafts" / "latest.tex"
-            if draft_path.exists():
-                return await check_paper_completeness(latex_file=str(draft_path))
-            for tex_file in (Path(current_project.root_path) / "papers" / "drafts").glob("*.tex"):
+            drafts_dir = Path(current_project.root_path) / "papers" / "drafts"
+            # Check for .tex files first
+            for tex_file in drafts_dir.glob("*.tex"):
                 return await check_paper_completeness(latex_file=str(tex_file))
+            # Check for .json drafts and extract content
+            for json_file in drafts_dir.glob("*.json"):
+                try:
+                    draft_content = json.loads(json_file.read_text())
+                    return await check_paper_completeness(paper_content=draft_content)
+                except:
+                    pass
         return await check_paper_completeness()
     
     elif name == "compile_paper":
@@ -702,9 +708,11 @@ async def _mark_complete() -> str:
     if len(workflow.figures_generated) == 0:
         warnings.append("No figures generated - paper may lack visual results")
     
-    # Check for draft files
+    # Check for draft files (.tex or .json from save_paper_draft)
     draft_dir = Path(current_project.root_path) / "papers" / "drafts"
-    has_draft = draft_dir.exists() and any(draft_dir.glob("*.tex"))
+    has_draft = draft_dir.exists() and (
+        any(draft_dir.glob("*.tex")) or any(draft_dir.glob("*.json"))
+    )
     if not has_draft:
         return json.dumps({
             "error": "VALIDATION_FAILED",
