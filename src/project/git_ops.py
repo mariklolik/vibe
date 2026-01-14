@@ -302,6 +302,174 @@ class GitOps:
             return True
         except subprocess.CalledProcessError:
             return False
+    
+    # === Git Worktree Management for Parallel Experiments ===
+    
+    async def create_worktree(self, experiment_id: str) -> Optional[Path]:
+        """
+        Create a git worktree for a parallel experiment.
+        
+        Each experiment runs in its own worktree with a dedicated branch,
+        allowing multiple experiments to run concurrently without conflicts.
+        
+        Args:
+            experiment_id: Unique identifier for the experiment
+        
+        Returns:
+            Path to the worktree, or None if creation failed
+        """
+        return await asyncio.to_thread(self._sync_create_worktree, experiment_id)
+    
+    def _sync_create_worktree(self, experiment_id: str) -> Optional[Path]:
+        """Sync version of create_worktree."""
+        try:
+            branch_name = f"exp/{experiment_id}"
+            worktree_path = self.repo_path / "worktrees" / experiment_id
+            
+            worktree_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            if worktree_path.exists():
+                return worktree_path
+            
+            self._run_git("worktree", "add", "-b", branch_name, str(worktree_path))
+            
+            return worktree_path
+        except subprocess.CalledProcessError:
+            return None
+    
+    async def list_worktrees(self) -> list[dict]:
+        """List all active worktrees."""
+        return await asyncio.to_thread(self._sync_list_worktrees)
+    
+    def _sync_list_worktrees(self) -> list[dict]:
+        """Sync version of list_worktrees."""
+        try:
+            result = self._run_git("worktree", "list", "--porcelain", check=False)
+            
+            worktrees = []
+            current = {}
+            
+            for line in result.stdout.split("\n"):
+                if line.startswith("worktree "):
+                    if current:
+                        worktrees.append(current)
+                    current = {"path": line[9:]}
+                elif line.startswith("HEAD "):
+                    current["head"] = line[5:]
+                elif line.startswith("branch "):
+                    current["branch"] = line[7:]
+                elif line == "detached":
+                    current["detached"] = True
+            
+            if current:
+                worktrees.append(current)
+            
+            return worktrees
+        except subprocess.CalledProcessError:
+            return []
+    
+    async def remove_worktree(self, experiment_id: str, force: bool = False) -> bool:
+        """
+        Remove a worktree after experiment completion.
+        
+        Args:
+            experiment_id: The experiment whose worktree to remove
+            force: Force removal even if there are uncommitted changes
+        
+        Returns:
+            True if removal succeeded
+        """
+        return await asyncio.to_thread(self._sync_remove_worktree, experiment_id, force)
+    
+    def _sync_remove_worktree(self, experiment_id: str, force: bool) -> bool:
+        """Sync version of remove_worktree."""
+        try:
+            worktree_path = self.repo_path / "worktrees" / experiment_id
+            
+            if force:
+                self._run_git("worktree", "remove", "--force", str(worktree_path))
+            else:
+                self._run_git("worktree", "remove", str(worktree_path))
+            
+            return True
+        except subprocess.CalledProcessError:
+            return False
+    
+    async def merge_worktree(self, experiment_id: str, delete_after: bool = True) -> bool:
+        """
+        Merge a completed experiment's worktree back to main branch.
+        
+        This is called after an experiment is verified to integrate its results.
+        
+        Args:
+            experiment_id: The experiment to merge
+            delete_after: Remove the worktree after successful merge
+        
+        Returns:
+            True if merge succeeded
+        """
+        return await asyncio.to_thread(self._sync_merge_worktree, experiment_id, delete_after)
+    
+    def _sync_merge_worktree(self, experiment_id: str, delete_after: bool) -> bool:
+        """Sync version of merge_worktree."""
+        try:
+            branch_name = f"exp/{experiment_id}"
+            
+            current_branch = self.get_current_branch()
+            
+            self._run_git("checkout", current_branch or "main")
+            
+            self._run_git(
+                "merge", branch_name, "--no-ff",
+                "-m", f"Merge verified experiment: {experiment_id}"
+            )
+            
+            if delete_after:
+                self._sync_remove_worktree(experiment_id, force=False)
+                self._run_git("branch", "-d", branch_name, check=False)
+            
+            return True
+        except subprocess.CalledProcessError:
+            return False
+    
+    async def get_worktree_status(self, experiment_id: str) -> Optional[dict]:
+        """Get status of a specific worktree."""
+        return await asyncio.to_thread(self._sync_get_worktree_status, experiment_id)
+    
+    def _sync_get_worktree_status(self, experiment_id: str) -> Optional[dict]:
+        """Sync version of get_worktree_status."""
+        worktree_path = self.repo_path / "worktrees" / experiment_id
+        
+        if not worktree_path.exists():
+            return None
+        
+        worktree_git = GitOps(worktree_path)
+        status = worktree_git.get_status()
+        
+        return {
+            "experiment_id": experiment_id,
+            "path": str(worktree_path),
+            "branch": f"exp/{experiment_id}",
+            "status": status,
+        }
+    
+    async def commit_in_worktree(
+        self,
+        experiment_id: str,
+        message: str,
+    ) -> Optional[str]:
+        """Make a commit in a specific worktree."""
+        return await asyncio.to_thread(self._sync_commit_in_worktree, experiment_id, message)
+    
+    def _sync_commit_in_worktree(self, experiment_id: str, message: str) -> Optional[str]:
+        """Sync version of commit_in_worktree."""
+        worktree_path = self.repo_path / "worktrees" / experiment_id
+        
+        if not worktree_path.exists():
+            return None
+        
+        worktree_git = GitOps(worktree_path)
+        return worktree_git._sync_commit(message)
 
 
 def init_project_repo(project_path: Path) -> GitOps:
