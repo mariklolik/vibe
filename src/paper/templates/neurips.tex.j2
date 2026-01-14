@@ -1,0 +1,70 @@
+\documentclass{article}
+
+\usepackage[preprint]{neurips_2024}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{subcaption}
+\usepackage{multirow}
+
+\newcommand{\method}{{"{{ paper.metadata.method_name }}"}}
+\newcommand{\ie}{\textit{i.e.}}
+\newcommand{\eg}{\textit{e.g.}}
+\newcommand{\etal}{\textit{et al.}}
+
+\title{{"{{ paper.metadata.title }}"}}
+
+\author{
+{% if anonymous %}
+Anonymous Author(s)
+{% else %}
+{% for author in paper.metadata.authors %}
+{% if not loop.first %} \And
+{% endif %}
+  {{ author.name }}{% if author.affiliation %} \\ {{ author.affiliation }}{% endif %}{% if author.email %} \\ \texttt{{"{{ author.email }}"}}{% endif %}
+{% endfor %}
+{% endif %}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+{{ paper.metadata.abstract }}
+\end{abstract}
+
+{{ sections_latex }}
+
+{{ figures_latex }}
+
+{{ tables_latex }}
+
+{{ algorithms_latex }}
+
+\section*{Acknowledgments}
+We thank the anonymous reviewers for their helpful feedback.
+{% if paper.metadata.github_url %}
+Code is available at: \url{{"{{ paper.metadata.github_url }}"}}.
+{% endif %}
+
+\bibliographystyle{unsrtnat}
+\bibliography{references}
+
+{% if appendix_latex %}
+\appendix
+{{ appendix_latex }}
+{% endif %}
+
+\end{document}

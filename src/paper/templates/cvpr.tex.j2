@@ -1,0 +1,66 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+\usepackage{cvpr}
+\usepackage{times}
+\usepackage{epsfig}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{subcaption}
+
+\usepackage[pagebackref=true,breaklinks=true,colorlinks,bookmarks=false]{hyperref}
+
+\cvprfinalcopy
+
+\def\cvprPaperID{****}
+\def\httilde{\mbox{\tt\raisebox{-.5ex}{\symbol{126}}}}
+
+\begin{document}
+
+\title{{"{{ paper.metadata.title }}"}}
+
+\author{
+{% if anonymous %}
+Anonymous Author(s)
+{% else %}
+{% for author in paper.metadata.authors %}
+{% if not loop.first %}\\
+\And
+{% endif %}
+{{ author.name }}{% if author.affiliation %}\\{{ author.affiliation }}{% endif %}
+{% endfor %}
+{% endif %}
+}
+
+\maketitle
+
+\begin{abstract}
+{{ paper.metadata.abstract }}
+\end{abstract}
+
+{{ sections_latex }}
+
+{{ figures_latex }}
+
+{{ tables_latex }}
+
+{{ algorithms_latex }}
+
+{% if paper.metadata.github_url %}
+\noindent\textbf{Code:} \url{{"{{ paper.metadata.github_url }}"}}
+{% endif %}
+
+{\small
+\bibliographystyle{ieee_fullname}
+\bibliography{references}
+}
+
+{% if appendix_latex %}
+\appendix
+{{ appendix_latex }}
+{% endif %}
+
+\end{document}

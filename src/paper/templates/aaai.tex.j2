@@ -1,0 +1,64 @@
+\documentclass[letterpaper]{article}
+\usepackage{aaai24}
+\usepackage{times}
+\usepackage{helvet}
+\usepackage{courier}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{subcaption}
+\usepackage{hyperref}
+
+\setlength{\pdfpagewidth}{8.5in}
+\setlength{\pdfpageheight}{11in}
+
+\title{{"{{ paper.metadata.title }}"}}
+\author{
+{% if anonymous %}
+Anonymous Author(s)
+{% else %}
+{% for author in paper.metadata.authors %}
+{{ author.name }}{% if author.affiliation %}\textsuperscript{{"{{ loop.index }}"}}{% endif %}{% if not loop.last %},{% endif %}
+{% endfor %}
+\\
+{% for author in paper.metadata.authors %}
+{% if author.affiliation %}
+\textsuperscript{{"{{ loop.index }}"}}{{ author.affiliation }}{% if not loop.last %},{% endif %}
+{% endif %}
+{% endfor %}
+{% endif %}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+{{ paper.metadata.abstract }}
+\end{abstract}
+
+{{ sections_latex }}
+
+{{ figures_latex }}
+
+{{ tables_latex }}
+
+{{ algorithms_latex }}
+
+\section*{Acknowledgments}
+We thank the reviewers for their feedback.
+{% if paper.metadata.github_url %}
+Code: \url{{"{{ paper.metadata.github_url }}"}}
+{% endif %}
+
+\bibliography{references}
+\bibliographystyle{aaai}
+
+{% if appendix_latex %}
+\appendix
+{{ appendix_latex }}
+{% endif %}
+
+\end{document}

@@ -1,0 +1,78 @@
+\documentclass[accepted]{icml2024}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage[capitalize]{cleveref}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{subcaption}
+
+\icmltitlerunning{{"{{ paper.metadata.short_title or paper.metadata.title[:50] }}"}}
+
+\begin{document}
+
+\twocolumn[
+\icmltitle{{"{{ paper.metadata.title }}"}}
+
+\icmlsetsymbol{equal}{*}
+
+\begin{icmlauthorlist}
+{% if anonymous %}
+\icmlauthor{Anonymous Author(s)}{anon}
+{% else %}
+{% for author in paper.metadata.authors %}
+\icmlauthor{{"{{ author.name }}"}}{aff{{ loop.index }}}
+{% endfor %}
+{% endif %}
+\end{icmlauthorlist}
+
+{% if not anonymous %}
+{% for author in paper.metadata.authors %}
+\icmlaffiliation{aff{{ loop.index }}}{{"{{ author.affiliation or 'Anonymous Institution' }}"}}
+{% endfor %}
+{% endif %}
+
+{% if paper.metadata.authors and not anonymous %}
+{% set corr = paper.metadata.authors[0] %}
+\icmlcorrespondingauthor{{"{{ corr.name }}"}}{{"{{ corr.email or 'email@institution.edu' }}"}}
+{% endif %}
+
+\icmlkeywords{{"{{ paper.metadata.keywords | join(', ') }}"}}
+
+\vskip 0.3in
+]
+
+\printAffiliationsAndNotice{}
+
+\begin{abstract}
+{{ paper.metadata.abstract }}
+\end{abstract}
+
+{{ sections_latex }}
+
+{{ figures_latex }}
+
+{{ tables_latex }}
+
+{{ algorithms_latex }}
+
+\section*{Acknowledgments}
+We thank the anonymous reviewers for their valuable feedback.
+{% if paper.metadata.github_url %}
+Code available at: \url{{"{{ paper.metadata.github_url }}"}}.
+{% endif %}
+
+\bibliography{references}
+\bibliographystyle{icml2024}
+
+{% if appendix_latex %}
+\appendix
+{{ appendix_latex }}
+{% endif %}
+
+\end{document}

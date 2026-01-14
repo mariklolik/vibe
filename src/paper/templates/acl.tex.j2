@@ -1,0 +1,73 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[hyperref]{acl2024}
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{subcaption}
+
+\renewcommand{\UrlFont}{\ttfamily\small}
+
+\title{{"{{ paper.metadata.title }}"}}
+
+\author{
+{% if anonymous %}
+Anonymous Author(s)
+{% else %}
+{% for author in paper.metadata.authors %}
+{% if not loop.first %} \and
+{% endif %}
+  {{ author.name }}{% if author.affiliation %} \\ {{ author.affiliation }}{% endif %}{% if author.email %} \\ \texttt{{"{{ author.email }}"}}{% endif %}
+{% endfor %}
+{% endif %}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+{{ paper.metadata.abstract }}
+\end{abstract}
+
+{{ sections_latex }}
+
+{{ figures_latex }}
+
+{{ tables_latex }}
+
+{{ algorithms_latex }}
+
+\section*{Limitations}
+{% set limitations_section = paper.get_section('Limitations') %}
+{% if limitations_section %}
+{{ limitations_section.content }}
+{% else %}
+We acknowledge several limitations of our work that future research could address.
+{% endif %}
+
+\section*{Ethics Statement}
+{% set ethics_section = paper.get_section('Ethics') %}
+{% if ethics_section %}
+{{ ethics_section.content }}
+{% else %}
+This work raises no significant ethical concerns. All experiments use publicly available datasets and do not involve human subjects.
+{% endif %}
+
+{% if paper.metadata.github_url %}
+\section*{Code Availability}
+Code is available at: \url{{"{{ paper.metadata.github_url }}"}}.
+{% endif %}
+
+\bibliography{references}
+\bibliographystyle{acl_natbib}
+
+{% if appendix_latex %}
+\appendix
+{{ appendix_latex }}
+{% endif %}
+
+\end{document}
