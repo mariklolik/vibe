@@ -102,7 +102,7 @@ For EACH section:
 
 **Method:**
 - Include formulas if reference papers have them
-- format_algorithm() for pseudocode
+- `format_algorithm(steps=[...], caption="Algorithm Name")` for pseudocode
 - Match technical depth of reference papers
 - Use ~{method_words} words (from metrics)
 
@@ -118,10 +118,25 @@ For EACH section:
 
 ### Step 6: Format for Conference
 
-```
+```python
 1. get_conference_requirements(conference="icml")
-2. cast_to_format(format_name="icml", content={...})
-3. compile_paper(tex_path="output/paper.tex")
+
+2. cast_to_format(
+     content={
+       "title": "Your Paper Title",
+       "abstract": "Abstract text...",
+       "authors": [{"name": "Author Name", "affiliation": "Institution"}],
+       "sections": [
+         {"name": "Introduction", "content": "..."},
+         {"name": "Method", "content": "..."},
+         ...
+       ]
+     },
+     format_name="icml",
+     output_dir="./output"
+   )
+
+3. compile_paper(tex_path="output/paper_icml.tex")
 ```
 
 ### Step 7: Verify and Complete
