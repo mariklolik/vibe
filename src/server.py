@@ -232,6 +232,50 @@ def _generate_persona_code() -> str:
     return str(random.randint(1000, 9999))
 
 
+async def start_new_research() -> str:
+    """
+    Start a fresh research session. Call this at the beginning of a NEW chat/conversation.
+    
+    This tool:
+    - Clears the current project selection (does NOT delete projects)
+    - Resets persona to 'researcher' 
+    - Prepares for a new research topic
+    
+    IMPORTANT: Call this when starting research on a NEW topic to avoid
+    contamination from previous research sessions.
+    
+    Returns:
+        Instructions for starting fresh research
+    """
+    # Clear current project selection
+    await project_manager.set_current_project(None)
+    
+    # Reset persona to default
+    persona_manager.clear_override()
+    
+    # List existing projects for reference
+    projects = await project_manager.list_projects()
+    project_names = [p.name for p in projects] if projects else []
+    
+    return json.dumps({
+        "status": "FRESH_SESSION",
+        "message": "Session reset for new research. Previous project deselected.",
+        "current_project": None,
+        "persona": "researcher",
+        "existing_projects": project_names,
+        "next_steps": [
+            "1. Define your research topic",
+            "2. Call create_project(name='your-topic-name') to create a new project",
+            "3. Call create_workflow(project_id) to initialize workflow",
+            "4. Use fetch_hf_trending or search_papers to gather context",
+        ],
+        "warning": (
+            "If you want to continue previous research instead, "
+            "call set_current_project(project_id) with one of the existing projects."
+        ),
+    }, indent=2)
+
+
 async def switch_persona(persona: str) -> str:
     """
     Request to switch to a different persona. Requires user confirmation.
@@ -470,6 +514,9 @@ TOOL_HANDLERS = {
     "switch_persona": switch_persona,
     "confirm_persona_switch": confirm_persona_switch,
     "get_active_persona": get_active_persona,
+    
+    # Session management
+    "start_new_research": start_new_research,
     
     # Environment
     "create_experiment_env": create_experiment_env,
@@ -1649,6 +1696,15 @@ TOOLS = [
         description="Get the currently active persona and its available tools.",
         inputSchema={"type": "object", "properties": {}},
     ),
+    Tool(
+        name="start_new_research",
+        description=(
+            "Start a fresh research session. CALL THIS at the beginning of a NEW chat/conversation "
+            "to avoid contamination from previous research. Clears current project selection and "
+            "resets persona to 'researcher'. Does NOT delete existing projects."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
     
     # === EXPANSION LOOP ===
     Tool(
@@ -1774,6 +1830,7 @@ CORE_TOOLS = [
     "set_current_project",
     "create_workflow",
     "approve_idea",
+    "start_new_research",
 ]
 
 
@@ -1834,6 +1891,7 @@ ALWAYS_ALLOWED_TOOLS = {
     "get_workflow_status",
     "get_workflow_checklist",
     "approve_idea",  # User action
+    "start_new_research",  # Fresh session
 }
 
 
