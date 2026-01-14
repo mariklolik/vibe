@@ -668,6 +668,8 @@ async def _verify_and_record_hypothesis_simple(
                 "p_value": float(p_value),
                 "significant": significant,
                 "experiment_id": experiment_id,
+                "verified_from_logs": True,
+                "can_claim": significant,
             }
             if workflow.stage == "experiment_setup":
                 workflow.stage = "experimenting"

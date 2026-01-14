@@ -14,6 +14,7 @@ Tools included:
 
 import json
 import logging
+from pathlib import Path
 from typing import Optional
 
 from mcp.server import Server
@@ -145,9 +146,9 @@ TOOL_DEFINITIONS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "title": {"type": "string"},
-                "method_name": {"type": "string"},
-                "conference": {"type": "string", "default": "icml"},
+                "title": {"type": "string", "description": "Paper title"},
+                "conference": {"type": "string", "default": "icml", "description": "Conference format"},
+                "sections": {"type": "array", "items": {"type": "string"}, "description": "Optional list of section names"},
             },
             "required": ["title"],
         },
@@ -328,8 +329,8 @@ async def _execute_tool(name: str, args: dict) -> str:
     elif name == "create_paper_skeleton":
         return await create_paper_skeleton(
             args["title"],
-            args.get("method_name"),
             args.get("conference", "icml"),
+            args.get("sections"),
         )
     
     elif name == "format_results_table":
@@ -361,12 +362,19 @@ async def _execute_tool(name: str, args: dict) -> str:
     
     elif name == "cast_to_format":
         return await cast_to_format(
-            args["format_name"],
-            args["content"],
-            args.get("output_dir"),
+            args.get("content"),
+            args.get("format_name", "icml"),
+            args.get("output_dir", "./output"),
         )
     
     elif name == "check_paper_completeness":
+        current_project = await project_manager.get_current_project()
+        if current_project:
+            draft_path = Path(current_project.project_dir) / "papers" / "drafts" / "latest.tex"
+            if draft_path.exists():
+                return await check_paper_completeness(latex_file=str(draft_path))
+            for tex_file in (Path(current_project.project_dir) / "papers" / "drafts").glob("*.tex"):
+                return await check_paper_completeness(latex_file=str(tex_file))
         return await check_paper_completeness()
     
     elif name == "compile_paper":
@@ -663,7 +671,7 @@ async def _save_paper_draft(content: dict, draft_name: Optional[str] = None) -> 
 
 
 async def _mark_complete() -> str:
-    """Mark paper as complete."""
+    """Mark paper as complete with validation."""
     current_project = await project_manager.get_current_project()
     if not current_project:
         return json.dumps({"error": "No active project"})
@@ -672,12 +680,31 @@ async def _mark_complete() -> str:
     if not workflow:
         return json.dumps({"error": "No workflow"})
     
+    # Validation: check minimum requirements
+    warnings = []
+    
+    if len(workflow.verified_hypotheses) == 0:
+        warnings.append("No verified hypotheses - paper has no validated claims")
+    
+    if len(workflow.figures_generated) == 0:
+        warnings.append("No figures generated - paper may lack visual results")
+    
+    # Check for draft files
+    draft_dir = Path(current_project.project_dir) / "papers" / "drafts"
+    has_draft = draft_dir.exists() and any(draft_dir.glob("*.tex"))
+    if not has_draft:
+        return json.dumps({
+            "error": "VALIDATION_FAILED",
+            "message": "Cannot mark complete: no paper draft found",
+            "action_required": "Create paper draft using cast_to_format() or save_paper_draft()",
+        }, indent=2)
+    
     workflow.stage = "completed"
     await workflow_db.save_workflow(workflow)
     
     idea = await experiments_db.get_idea(workflow.approved_idea_id) if workflow.approved_idea_id else None
     
-    return json.dumps({
+    result = {
         "status": "PIPELINE_COMPLETE",
         "message": (
             "Congratulations! Research pipeline complete.\n\n"
@@ -689,9 +716,14 @@ async def _mark_complete() -> str:
             f"- Sections: {list(workflow.paper_sections.keys())}\n"
             f"- Conference: {workflow.target_conference or 'Not set'}"
         ),
-        "project_path": str(current_project.root_path),
-        "papers_dir": str(current_project.root_path / "papers"),
-    }, indent=2)
+        "project_path": str(current_project.project_dir),
+        "papers_dir": str(Path(current_project.project_dir) / "papers"),
+    }
+    
+    if warnings:
+        result["warnings"] = warnings
+    
+    return json.dumps(result, indent=2)
 
 
 async def main():

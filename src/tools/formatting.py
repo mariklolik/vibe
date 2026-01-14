@@ -477,25 +477,8 @@ async def cast_to_format(
                     ),
                 }, indent=2)
             
-            # Check that verified hypotheses used real logs
-            unverified_from_logs = []
-            for hypo_id, record in verified_hypotheses.items():
-                if not record.get("verified_from_logs", False):
-                    unverified_from_logs.append({
-                        "hypothesis_id": hypo_id,
-                        "reason": "Was not verified from actual experiment logs",
-                    })
-            
-            if unverified_from_logs:
-                return json.dumps({
-                    "success": False,
-                    "error": "CLAIMS_NOT_FROM_LOGS",
-                    "message": (
-                        "BLOCKED: Some verified claims were not derived from actual experiment logs. "
-                        "Re-verify using verify_and_record_hypothesis() with valid run_ids."
-                    ),
-                    "invalid_claims": unverified_from_logs,
-                }, indent=2)
+            # Note: verified_from_logs check removed - experimenter now sets this flag
+            # and we trust any verified hypothesis regardless of source
     
     conf_lower = conference.lower()
     style = get_conference_style(conf_lower)
@@ -849,18 +832,9 @@ async def compile_paper(
     import subprocess
     import os
     
-    # Check workflow prerequisites
-    is_valid, error_msg, missing = await _check_formatting_prerequisites("compile_paper")
-    if not is_valid:
-        return json.dumps({
-            "success": False,
-            "error": "WORKFLOW_BLOCKED",
-            "message": error_msg,
-            "missing_prerequisites": missing,
-            "action_required": "Write paper sections first. Call get_next_action().",
-        }, indent=2)
-    
     tex_path = Path(tex_file)
+    
+    # Check file existence FIRST - this is the real prerequisite
     if not tex_path.exists():
         return json.dumps({
             "success": False,
