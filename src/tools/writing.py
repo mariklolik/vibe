@@ -454,10 +454,18 @@ async def get_citations_for_topic(
     bibtex = ""
     
     for paper in papers[:max_citations]:
-        # Generate citation key
+        # Generate citation key: author + year + first_word_of_title
         first_author = paper.authors[0].split()[-1].lower() if paper.authors else "unknown"
         year = paper.published[:4] if paper.published else "2024"
-        cite_key = f"{first_author}{year}"
+        
+        # Get first meaningful word from title (skip common words)
+        skip_words = {"a", "an", "the", "on", "in", "for", "of", "to", "with", "and", "or"}
+        title_words = [w.lower() for w in paper.title.split() if w.lower() not in skip_words]
+        title_word = title_words[0] if title_words else ""
+        # Remove non-alphanumeric chars
+        title_word = "".join(c for c in title_word if c.isalnum())
+        
+        cite_key = f"{first_author}{year}{title_word}"
         
         # Avoid duplicate keys
         base_key = cite_key
@@ -718,14 +726,30 @@ async def save_to_file(
 
 
 def _count_words_in_latex(content: str) -> int:
-    """Count words in LaTeX content, excluding commands."""
+    """Count words in LaTeX content, excluding commands and comments."""
     import re
     
-    text = re.sub(r'\\[a-zA-Z]+\{[^}]*\}', ' ', content)
+    # Remove comments (lines starting with %)
+    text = re.sub(r'%.*$', '', content, flags=re.MULTILINE)
+    
+    # Remove common LaTeX environments that don't contain prose
+    text = re.sub(r'\\begin\{(equation|align|figure|table|algorithm|lstlisting|verbatim)\*?\}.*?\\end\{\1\*?\}', ' ', text, flags=re.DOTALL)
+    
+    # Remove \command{...} but keep content inside for commands like \textbf{word}
+    text = re.sub(r'\\(textbf|textit|emph|underline|texttt)\{([^}]*)\}', r'\2', text)
+    
+    # Remove other commands with arguments
+    text = re.sub(r'\\[a-zA-Z]+\{[^}]*\}', ' ', text)
+    text = re.sub(r'\\[a-zA-Z]+\[[^\]]*\]', ' ', text)
     text = re.sub(r'\\[a-zA-Z]+', ' ', text)
-    text = re.sub(r'\{|\}|\[|\]|\\', ' ', text)
+    
+    # Remove special characters and braces
+    text = re.sub(r'[{}\[\]\\$&%#_^~]', ' ', text)
+    
+    # Normalize whitespace
     text = re.sub(r'\s+', ' ', text)
     
+    # Count words (at least 2 chars, not just numbers)
     words = [w for w in text.split() if len(w) > 1 and not w.isdigit()]
     return len(words)
 

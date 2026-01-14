@@ -964,12 +964,28 @@ async def compile_paper(
             })
     
     pdf_path = work_dir / f"{stem}.pdf"
+    pdf_exists = pdf_path.exists()
     
-    return json.dumps({
-        "success": pdf_path.exists(),
-        "pdf_file": str(pdf_path) if pdf_path.exists() else None,
+    # Check for specific error conditions
+    error_msg = None
+    if not pdf_exists:
+        # Check logs for missing style files
+        all_errors = [log.get("error", "") for log in logs if log.get("error")]
+        error_text = " ".join(str(e) for e in all_errors)
+        if "Missing packages" in error_text or "not found" in error_text.lower():
+            error_msg = "PDF not generated due to missing style files. Use standard \\documentclass{article} or install required .cls files."
+        else:
+            error_msg = "PDF not generated. Check compilation logs for errors."
+    
+    result = {
+        "success": pdf_exists,
+        "pdf_file": str(pdf_path) if pdf_exists else None,
         "compilation_logs": logs,
-    }, indent=2)
+    }
+    if error_msg:
+        result["error"] = error_msg
+    
+    return json.dumps(result, indent=2)
 
 
 def add_github_link_to_latex(latex_content: str, repo_url: str) -> str:

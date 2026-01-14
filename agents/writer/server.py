@@ -160,10 +160,10 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "results": {"type": "object", "description": "Results dict {method: {metric: value}}"},
-                "metrics": {"type": "array", "items": {"type": "string"}},
-                "caption": {"type": "string"},
+                "caption": {"type": "string", "description": "Table caption", "default": "Experimental results"},
+                "label": {"type": "string", "description": "LaTeX label", "default": "tab:results"},
             },
-            "required": ["results", "metrics"],
+            "required": ["results"],
         },
     ),
     Tool(
@@ -341,8 +341,8 @@ async def _execute_tool(name: str, args: dict) -> str:
                 return json.dumps({"error": "results must be a valid JSON object"})
         return await format_results_table(
             results,
-            args["metrics"],
-            args.get("caption"),
+            args.get("caption", "Experimental results"),
+            args.get("label", "tab:results"),
         )
     
     elif name == "format_algorithm":
@@ -374,10 +374,15 @@ async def _execute_tool(name: str, args: dict) -> str:
                     "error": "content must be a valid JSON object, not a string",
                     "received": content[:100] if len(content) > 100 else content,
                 })
+        # Default output to project dir, not current working dir
+        current_project = await project_manager.get_current_project()
+        default_output = "./output"
+        if current_project:
+            default_output = str(current_project.root_path / "papers" / "output")
         return await cast_to_format(
             content,
             args.get("format_name", "icml"),
-            args.get("output_dir", "./output"),
+            args.get("output_dir", default_output),
         )
     
     elif name == "check_paper_completeness":
