@@ -193,6 +193,36 @@ async def get_next_action() -> str:
             "do_not_proceed": True,
         }, indent=2)
     
+    # HARD BLOCK: If there are running experiments, must wait for completion and log
+    running_experiments = [e for e in workflow.completed_experiments if e.endswith("_running")]
+    # Also check experiments_db for running status
+    all_experiments = await experiments_db.list_experiments(status="running")
+    if all_experiments:
+        return json.dumps({
+            "status": "EXPERIMENTS_RUNNING",
+            "message": (
+                "🚨 STOP. Experiments are currently running. You MUST:\n"
+                "1. Wait for experiments to complete\n"
+                "2. Call log_experiment(run_id) for EACH completed experiment\n"
+                "3. Use get_real_metrics(run_id) to retrieve VERIFIED metrics\n"
+                "4. DO NOT fabricate or imagine ANY results"
+            ),
+            "running_experiments": [
+                {"experiment_id": e.experiment_id, "name": e.name}
+                for e in all_experiments
+            ],
+            "action_required": (
+                "For each running experiment, wait for completion then call:\n"
+                "log_experiment(project_dir='path', run_id='<experiment_id>')"
+            ),
+            "ai_instruction": (
+                "DO NOT report any metrics until you have called get_real_metrics() "
+                "and received actual values from the experiment logs. "
+                "ANY number you report must come from tool output, not your imagination."
+            ),
+            "do_not_proceed": True,
+        }, indent=2)
+    
     # HARD BLOCK: Before ANY planning or experiments, require idea approval
     # This prevents the model from creating a plan that includes idea approval as step 1
     if current_stage in ["idea_generation", "idea_approval"]:

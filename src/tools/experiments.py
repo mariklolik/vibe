@@ -163,6 +163,15 @@ async def run_experiment(
             "status": "running",
             "tracked": tracker is not None,
             "monitor_cmd": f"tail -f {stdout_log}",
+            "CRITICAL_INSTRUCTION": (
+                "🚨 EXPERIMENT IS RUNNING. YOU MUST:\n"
+                "1. WAIT for the experiment to complete (monitor with monitor_cmd)\n"
+                "2. Call log_experiment(run_id='" + exp_id + "') to parse REAL metrics from logs\n"
+                "3. Use get_real_metrics(run_id) to get VERIFIED metrics\n"
+                "4. DO NOT fabricate or imagine any results - they MUST come from the log file\n"
+                "5. If you report ANY metrics not from get_real_metrics(), you are FABRICATING DATA"
+            ),
+            "next_required_action": f"log_experiment(project_dir, run_id='{exp_id}')",
         })
     except Exception as e:
         exp.status = "failed"
