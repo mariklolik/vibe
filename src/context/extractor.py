@@ -44,6 +44,28 @@ class PaperMetrics:
             page_count=data.get("page_count", 9),
         )
     
+    @staticmethod
+    def _normalize_section_name(name: str) -> str | None:
+        """Normalize section name to standard section or None if irrelevant."""
+        name_lower = name.lower().strip().replace("_", " ").replace("-", " ")
+        
+        # Map to standard sections
+        if any(k in name_lower for k in ["introduction", "intro"]):
+            return "introduction"
+        elif any(k in name_lower for k in ["related work", "background", "prior work", "literature"]):
+            return "related_work"
+        elif any(k in name_lower for k in ["method", "approach", "model", "framework", "architecture", "proposed"]):
+            return "method"
+        elif any(k in name_lower for k in ["experiment", "evaluation", "result", "empirical"]):
+            return "experiments"
+        elif any(k in name_lower for k in ["conclusion", "summary", "discussion", "future"]):
+            return "conclusion"
+        elif any(k in name_lower for k in ["abstract"]):
+            return "abstract"
+        else:
+            # Skip irrelevant sections (subsections, random headings)
+            return None
+    
     @classmethod
     def average(cls, metrics_list: list["PaperMetrics"]) -> "PaperMetrics":
         """Compute average metrics from multiple papers."""
@@ -52,14 +74,25 @@ class PaperMetrics:
         
         n = len(metrics_list)
         
-        all_sections = set()
+        # Aggregate to standard sections only
+        standard_sections = ["introduction", "related_work", "method", "experiments", "conclusion"]
+        section_totals = {s: [] for s in standard_sections}
+        
         for m in metrics_list:
-            all_sections.update(m.section_lengths.keys())
+            for section_name, word_count in m.section_lengths.items():
+                normalized = cls._normalize_section_name(section_name)
+                if normalized and normalized in section_totals:
+                    section_totals[normalized].append(word_count)
         
         avg_sections = {}
-        for section in all_sections:
-            values = [m.section_lengths.get(section, 0) for m in metrics_list]
-            avg_sections[section] = sum(values) // n
+        for section in standard_sections:
+            values = section_totals[section]
+            if values:
+                avg_sections[section] = sum(values) // len(values)
+            else:
+                # Use defaults if no data
+                defaults = {"introduction": 800, "related_work": 600, "method": 1200, "experiments": 1500, "conclusion": 400}
+                avg_sections[section] = defaults.get(section, 500)
         
         return cls(
             word_count=sum(m.word_count for m in metrics_list) // n,

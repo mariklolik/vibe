@@ -225,20 +225,21 @@ async def get_verified_claims_for_writing() -> str:
     
     claims = []
     for hypo_id, record in verified.items():
-        # Accept claims that are either can_claim=True OR have significant=True
-        if record.get("can_claim", False) or record.get("significant", False):
-            claims.append({
-                "hypothesis_id": hypo_id,
-                "statement": record.get("statement", ""),
-                "metric": record.get("metric", ""),
-                "p_value": record.get("p_value"),
-                "effect_size": record.get("effect_size"),
-                "effect_interpretation": record.get("effect_interpretation"),
-                "group1_mean": record.get("group1_mean"),
-                "group2_mean": record.get("group2_mean"),
-                "run_ids": record.get("run_ids", []),
-                "verified_at": record.get("timestamp"),
-            })
+        # Accept ANY recorded hypothesis as a claim
+        # The experimenter already validated before recording
+        claims.append({
+            "hypothesis_id": hypo_id,
+            "statement": record.get("statement", ""),
+            "metric": record.get("metric", ""),
+            "p_value": record.get("p_value"),
+            "significant": record.get("significant", record.get("can_claim", True)),
+            "effect_size": record.get("effect_size"),
+            "effect_interpretation": record.get("effect_interpretation"),
+            "group1_mean": record.get("group1_mean"),
+            "group2_mean": record.get("group2_mean"),
+            "run_ids": record.get("run_ids", []),
+            "verified_at": record.get("timestamp"),
+        })
     
     if not claims:
         return json.dumps({

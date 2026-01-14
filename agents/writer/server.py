@@ -379,6 +379,17 @@ async def _execute_tool(name: str, args: dict) -> str:
         default_output = "./output"
         if current_project:
             default_output = str(current_project.root_path / "papers" / "output")
+        
+        # Update paper_sections in workflow
+        if current_project and content:
+            workflow = await workflow_db.get_project_workflow(current_project.project_id)
+            if workflow and "sections" in content:
+                for section in content["sections"]:
+                    if isinstance(section, dict) and "name" in section:
+                        workflow.paper_sections[section["name"]] = section.get("content", "")[:200]
+                workflow.target_conference = args.get("format_name", "icml")
+                await workflow_db.save_workflow(workflow)
+        
         return await cast_to_format(
             content,
             args.get("format_name", "icml"),
@@ -388,17 +399,27 @@ async def _execute_tool(name: str, args: dict) -> str:
     elif name == "check_paper_completeness":
         current_project = await project_manager.get_current_project()
         if current_project:
-            drafts_dir = Path(current_project.root_path) / "papers" / "drafts"
-            # Check for .tex files first
-            for tex_file in drafts_dir.glob("*.tex"):
-                return await check_paper_completeness(latex_file=str(tex_file))
-            # Check for .json drafts and extract content
-            for json_file in drafts_dir.glob("*.json"):
-                try:
-                    draft_content = json.loads(json_file.read_text())
-                    return await check_paper_completeness(paper_content=draft_content)
-                except:
-                    pass
+            papers_root = Path(current_project.root_path) / "papers"
+            # Check multiple locations for .tex files
+            search_dirs = [
+                papers_root / "output",
+                papers_root / "drafts",
+                papers_root / "final",
+                papers_root,
+            ]
+            for search_dir in search_dirs:
+                if search_dir.exists():
+                    for tex_file in search_dir.glob("*.tex"):
+                        return await check_paper_completeness(latex_file=str(tex_file))
+            # Fallback: check for .json drafts
+            drafts_dir = papers_root / "drafts"
+            if drafts_dir.exists():
+                for json_file in drafts_dir.glob("*.json"):
+                    try:
+                        draft_content = json.loads(json_file.read_text())
+                        return await check_paper_completeness(paper_content=draft_content)
+                    except:
+                        pass
         return await check_paper_completeness()
     
     elif name == "compile_paper":
@@ -516,7 +537,8 @@ async def _extract_writing_style(paper_ids: list[str]) -> str:
             },
         })
     
-    style_context = await extract_writing_style_context(arxiv_ids[:5])
+    # Analyze up to 20 papers for more representative style
+    style_context = await extract_writing_style_context(arxiv_ids[:20])
     
     return json.dumps({
         "style_context": style_context,
@@ -562,7 +584,8 @@ async def _get_full_writing_context(paper_ids: list[str]) -> str:
             "message": "Gather papers first using researcher-mcp",
         })
     
-    context = await get_paper_context_for_writing(arxiv_ids[:5])
+    # Analyze up to 20 papers for comprehensive context
+    context = await get_paper_context_for_writing(arxiv_ids[:20])
     
     # Store target metrics in workflow
     workflow = await workflow_db.get_project_workflow(current_project.project_id)

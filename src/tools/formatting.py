@@ -84,10 +84,10 @@ def generate_neurips_paper(content: dict) -> str:
     if appendix_tex:
         appendix_section = f"\\appendix\n{appendix_tex}"
     
-    return f"""\\documentclass{{article}}
+    return f"""\\documentclass[11pt]{{article}}
 
-% Package setup for NeurIPS
-\\usepackage[preprint]{{neurips_2024}}
+% Standard packages for conference-style paper
+\\usepackage[margin=1in]{{geometry}}
 \\usepackage[utf8]{{inputenc}}
 \\usepackage[T1]{{fontenc}}
 \\usepackage{{hyperref}}
@@ -104,6 +104,8 @@ def generate_neurips_paper(content: dict) -> str:
 \\usepackage{{algorithmic}}
 \\usepackage{{subcaption}}
 \\usepackage{{multirow}}
+\\usepackage{{natbib}}
+\\usepackage{{times}}
 
 % Custom commands
 \\newcommand{{\\method}}{{{method_name}}}
@@ -116,6 +118,7 @@ def generate_neurips_paper(content: dict) -> str:
 \\author{{
 {authors_tex}
 }}
+\\date{{}}
 
 \\begin{{document}}
 
@@ -130,7 +133,7 @@ def generate_neurips_paper(content: dict) -> str:
 \\section*{{Acknowledgments}}
 We thank the anonymous reviewers for their helpful feedback.
 
-\\bibliographystyle{{unsrtnat}}
+\\bibliographystyle{{plainnat}}
 \\bibliography{{references}}
 
 {appendix_section}
@@ -197,55 +200,53 @@ def generate_icml_paper(content: dict) -> str:
     
     keywords_str = ", ".join(keywords)
     
-    return f"""\\documentclass[accepted]{{icml2024}}
+    # Build author string for standard article class
+    authors_str = " \\and ".join([
+        f"{a.get('name', 'Author')}\\\\{affiliations.get('aff1', 'Institution')}"
+        for a in authors_list
+    ])
+    
+    return f"""\\documentclass[10pt,twocolumn]{{article}}
 
+% Standard packages for conference-style paper
+\\usepackage[margin=1in]{{geometry}}
 \\usepackage{{amsmath}}
 \\usepackage{{amssymb}}
 \\usepackage{{mathtools}}
 \\usepackage{{amsthm}}
-\\usepackage[capitalize]{{cleveref}}
 \\usepackage{{booktabs}}
 \\usepackage{{graphicx}}
 \\usepackage{{hyperref}}
 \\usepackage{{algorithm}}
 \\usepackage{{algorithmic}}
 \\usepackage{{subcaption}}
+\\usepackage{{natbib}}
+\\usepackage{{times}}
 
-\\icmltitlerunning{{{short_title}}}
+% Title formatting
+\\title{{{title}}}
+\\author{{{authors_str}}}
+\\date{{}}
 
 \\begin{{document}}
 
-\\twocolumn[
-\\icmltitle{{{title}}}
-
-\\icmlsetsymbol{{equal}}{{*}}
-
-\\begin{{icmlauthorlist}}
-{author_lines}
-\\end{{icmlauthorlist}}
-
-{aff_lines}
-
-\\icmlcorrespondingauthor{{{corr.get('name', 'Author')}}}{{{corr.get('email', 'email@inst.edu')}}}
-
-\\icmlkeywords{{{keywords_str}}}
-
-\\vskip 0.3in
-]
-
-\\printAffiliationsAndNotice{{}}
+\\maketitle
 
 \\begin{{abstract}}
 {abstract}
 \\end{{abstract}}
+
+\\textbf{{Keywords:}} {keywords_str}
+
+\\vspace{{0.5em}}
 
 {sections_tex}
 
 \\section*{{Acknowledgments}}
 We thank the anonymous reviewers for their valuable feedback.
 
+\\bibliographystyle{{plainnat}}
 \\bibliography{{references}}
-\\bibliographystyle{{icml2024}}
 
 \\end{{document}}
 """
@@ -312,7 +313,7 @@ def generate_acl_paper(content: dict) -> str:
 {ethics}
 
 \\bibliography{{references}}
-\\bibliographystyle{{acl_natbib}}
+\\bibliographystyle{{plainnat}}
 
 \\end{{document}}
 """
@@ -377,7 +378,7 @@ def generate_cvpr_paper(content: dict) -> str:
 {sections_tex}
 
 {{\\small
-\\bibliographystyle{{ieee_fullname}}
+\\bibliographystyle{{plainnat}}
 \\bibliography{{references}}
 }}
 
@@ -574,6 +575,26 @@ async def cast_to_format(
         for sty_file in style_source.glob("*.sty"):
             shutil.copy(sty_file, output_path / sty_file.name)
     
+    # Copy figures to output directory
+    figures_copied = []
+    for fig in content.get("figures", []):
+        if isinstance(fig, dict):
+            fig_path = fig.get("path", "")
+            if fig_path:
+                src_path = Path(fig_path)
+                if not src_path.is_absolute():
+                    # Try relative to project directory first
+                    current_project_obj = await project_manager.get_current_project()
+                    if current_project_obj:
+                        project_fig_path = Path(current_project_obj.root_path) / fig_path
+                        if project_fig_path.exists():
+                            src_path = project_fig_path
+                
+                if src_path.exists():
+                    dest_path = output_path / src_path.name
+                    shutil.copy(src_path, dest_path)
+                    figures_copied.append(str(dest_path))
+    
     # Create empty bib file if not exists
     bib_file = output_path / "references.bib"
     if not bib_file.exists():
@@ -588,10 +609,12 @@ async def cast_to_format(
         "conference": conference.upper(),
         "output_file": str(tex_file),
         "bibliography": str(bib_file),
+        "figures_copied": figures_copied,
         "statistics": {
             "word_count": word_count,
             "section_count": section_count,
             "estimated_pages": max(1, word_count // 550),
+            "figures": len(figures_copied),
         },
         "requirements": {
             "page_limit": style.page_limit,
