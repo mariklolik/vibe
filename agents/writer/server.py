@@ -1,0 +1,472 @@
+"""Writer MCP Server - Paper writing and conference formatting.
+
+This is a focused MCP with only writing-phase tools.
+Start a NEW Cursor chat with this MCP after experiments are complete.
+
+Tools included:
+- Get verified results and figures
+- Paper structure planning
+- LaTeX formatting helpers
+- Citation management
+- Conference formatting (ICML, NeurIPS, etc.)
+- PDF compilation
+"""
+
+import json
+import logging
+from typing import Optional
+
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
+
+# Import from existing src/
+from src.db.workflow import workflow_db
+from src.db.experiments_db import experiments_db
+from src.db.papers_cache import papers_cache
+from src.project.manager import project_manager
+
+# Import existing tools
+from src.tools.writing import (
+    get_project_writing_context,
+    extract_style_from_context,
+    estimate_paper_structure,
+    format_results_table,
+    format_algorithm,
+    get_citations_for_topic,
+    get_verified_claims_for_writing,
+    create_paper_skeleton,
+    check_paper_completeness,
+)
+from src.tools.formatting import (
+    cast_to_format,
+    compile_paper,
+    list_conferences,
+    get_conference_requirements,
+)
+from src.context.extractor import extract_paper_context
+
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("writer-mcp")
+
+server = Server("writer-mcp")
+
+
+TOOL_DEFINITIONS = [
+    Tool(
+        name="get_status",
+        description="Get current workflow status. Shows verified results and writing progress.",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="get_verified_claims",
+        description="Get all verified claims from experiments. ONLY these can go in the paper.",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="get_project_writing_context",
+        description="Get all gathered papers and context for writing. Use to match style.",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="extract_style_from_context",
+        description="Analyze gathered papers to extract writing style patterns.",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="estimate_paper_structure",
+        description="Estimate recommended paper structure based on target pages.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "target_pages": {"type": "integer", "default": 9},
+                "conference": {"type": "string", "default": "icml"},
+            },
+            "required": [],
+        },
+    ),
+    Tool(
+        name="create_paper_skeleton",
+        description="Create a paper skeleton with sections structure.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "method_name": {"type": "string"},
+                "conference": {"type": "string", "default": "icml"},
+            },
+            "required": ["title"],
+        },
+    ),
+    Tool(
+        name="format_results_table",
+        description="Format experiment results as a LaTeX table.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "results": {"type": "object", "description": "Results dict {method: {metric: value}}"},
+                "metrics": {"type": "array", "items": {"type": "string"}},
+                "caption": {"type": "string"},
+            },
+            "required": ["results", "metrics"],
+        },
+    ),
+    Tool(
+        name="format_algorithm",
+        description="Format a method as a LaTeX algorithm block.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "steps": {"type": "array", "items": {"type": "string"}},
+                "inputs": {"type": "array", "items": {"type": "string"}},
+                "output": {"type": "string"},
+            },
+            "required": ["name", "steps"],
+        },
+    ),
+    Tool(
+        name="get_citations_for_topic",
+        description="Get citations for papers related to a topic.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string"},
+                "max_citations": {"type": "integer", "default": 5},
+            },
+            "required": ["topic"],
+        },
+    ),
+    Tool(
+        name="list_conferences",
+        description="List all supported conference formats.",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="get_conference_requirements",
+        description="Get formatting requirements for a specific conference.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "conference": {"type": "string", "description": "Conference name (e.g., icml, neurips)"},
+            },
+            "required": ["conference"],
+        },
+    ),
+    Tool(
+        name="cast_to_format",
+        description="Convert paper content to conference format LaTeX.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "format_name": {"type": "string", "description": "Conference format (icml, neurips, cvpr, aaai, acl)"},
+                "content": {
+                    "type": "object",
+                    "description": "Paper content dict with title, abstract, sections, etc.",
+                },
+                "output_dir": {"type": "string"},
+            },
+            "required": ["format_name", "content"],
+        },
+    ),
+    Tool(
+        name="check_paper_completeness",
+        description="Check if paper has all required sections and meets targets.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    ),
+    Tool(
+        name="compile_paper",
+        description="Compile LaTeX to PDF.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "tex_path": {"type": "string"},
+                "output_dir": {"type": "string"},
+            },
+            "required": ["tex_path"],
+        },
+    ),
+    Tool(
+        name="extract_paper_context",
+        description="Extract structure from a reference paper for style matching.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "arxiv_id": {"type": "string"},
+            },
+            "required": ["arxiv_id"],
+        },
+    ),
+    Tool(
+        name="save_paper_draft",
+        description="Save current paper draft to project.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "content": {"type": "object"},
+                "draft_name": {"type": "string"},
+            },
+            "required": ["content"],
+        },
+    ),
+    Tool(
+        name="mark_complete",
+        description="Mark paper as complete. Final step of the pipeline.",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+]
+
+
+@server.list_tools()
+async def list_tools():
+    """Return list of available tools."""
+    return TOOL_DEFINITIONS
+
+
+@server.call_tool()
+async def call_tool(name: str, arguments: dict):
+    """Handle tool calls."""
+    try:
+        result = await _execute_tool(name, arguments)
+        return [TextContent(type="text", text=result)]
+    except Exception as e:
+        logger.exception(f"Tool {name} failed")
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+
+
+async def _execute_tool(name: str, args: dict) -> str:
+    """Execute a tool and return result."""
+    
+    if name == "get_status":
+        return await _get_status()
+    
+    elif name == "get_verified_claims":
+        return await get_verified_claims_for_writing()
+    
+    elif name == "get_project_writing_context":
+        return await get_project_writing_context()
+    
+    elif name == "extract_style_from_context":
+        return await extract_style_from_context()
+    
+    elif name == "estimate_paper_structure":
+        return await estimate_paper_structure(
+            args.get("target_pages", 9),
+            args.get("conference", "icml"),
+        )
+    
+    elif name == "create_paper_skeleton":
+        return await create_paper_skeleton(
+            args["title"],
+            args.get("method_name"),
+            args.get("conference", "icml"),
+        )
+    
+    elif name == "format_results_table":
+        return await format_results_table(
+            args["results"],
+            args["metrics"],
+            args.get("caption"),
+        )
+    
+    elif name == "format_algorithm":
+        return await format_algorithm(
+            args["name"],
+            args["steps"],
+            args.get("inputs"),
+            args.get("output"),
+        )
+    
+    elif name == "get_citations_for_topic":
+        return await get_citations_for_topic(
+            args["topic"],
+            args.get("max_citations", 5),
+        )
+    
+    elif name == "list_conferences":
+        return await list_conferences()
+    
+    elif name == "get_conference_requirements":
+        return await get_conference_requirements(args["conference"])
+    
+    elif name == "cast_to_format":
+        return await cast_to_format(
+            args["format_name"],
+            args["content"],
+            args.get("output_dir"),
+        )
+    
+    elif name == "check_paper_completeness":
+        return await check_paper_completeness()
+    
+    elif name == "compile_paper":
+        return await compile_paper(
+            args["tex_path"],
+            args.get("output_dir"),
+        )
+    
+    elif name == "extract_paper_context":
+        return await extract_paper_context(args["arxiv_id"])
+    
+    elif name == "save_paper_draft":
+        return await _save_paper_draft(args["content"], args.get("draft_name"))
+    
+    elif name == "mark_complete":
+        return await _mark_complete()
+    
+    else:
+        return json.dumps({"error": f"Unknown tool: {name}"})
+
+
+async def _get_status() -> str:
+    """Get current workflow status."""
+    current_project = await project_manager.get_current_project()
+    
+    if not current_project:
+        return json.dumps({
+            "status": "NO_PROJECT",
+            "agent": "writer-mcp",
+            "message": "No active project.",
+        }, indent=2)
+    
+    workflow = await workflow_db.get_project_workflow(current_project.project_id)
+    
+    if not workflow:
+        return json.dumps({
+            "status": "NO_WORKFLOW",
+            "agent": "writer-mcp",
+        }, indent=2)
+    
+    if not workflow.verified_hypotheses:
+        return json.dumps({
+            "status": "WRONG_PHASE",
+            "agent": "writer-mcp",
+            "message": (
+                "No verified hypotheses found. Experiments incomplete.\n"
+                ">>> Use experimenter-mcp first to verify results."
+            ),
+        }, indent=2)
+    
+    idea = await experiments_db.get_idea(workflow.approved_idea_id) if workflow.approved_idea_id else None
+    
+    # Check if paper is complete
+    if workflow.stage == "completed":
+        return json.dumps({
+            "status": "COMPLETE",
+            "agent": "writer-mcp",
+            "project": current_project.project_id,
+            "message": "Paper is complete!",
+            "paper_sections": list(workflow.paper_sections.keys()),
+        }, indent=2)
+    
+    return json.dumps({
+        "status": "IN_PROGRESS",
+        "agent": "writer-mcp",
+        "project": current_project.project_id,
+        "stage": workflow.stage,
+        "approved_idea": {
+            "title": idea.title if idea else "Unknown",
+        },
+        "verified_claims": list(workflow.verified_hypotheses.keys()),
+        "figures_available": workflow.figures_generated,
+        "sections_written": list(workflow.paper_sections.keys()),
+        "target_conference": workflow.target_conference or "icml",
+        "next_action": _suggest_next_action(workflow),
+    }, indent=2)
+
+
+def _suggest_next_action(workflow) -> str:
+    """Suggest what to do next."""
+    if not workflow.paper_sections:
+        return "Get context: get_project_writing_context(), then start writing sections"
+    
+    required = {"introduction", "method", "experiments", "conclusion"}
+    written = set(workflow.paper_sections.keys())
+    remaining = required - written
+    
+    if remaining:
+        return f"Write remaining sections: {remaining}"
+    
+    if not workflow.target_conference:
+        return "Format paper: cast_to_format(format_name='icml', content=...)"
+    
+    return "Compile and complete: compile_paper(...), then mark_complete()"
+
+
+async def _save_paper_draft(content: dict, draft_name: Optional[str] = None) -> str:
+    """Save paper draft to project."""
+    current_project = await project_manager.get_current_project()
+    if not current_project:
+        return json.dumps({"error": "No active project"})
+    
+    drafts_dir = current_project.root_path / "papers" / "drafts"
+    drafts_dir.mkdir(parents=True, exist_ok=True)
+    
+    from datetime import datetime
+    name = draft_name or f"draft_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    draft_path = drafts_dir / f"{name}.json"
+    
+    draft_path.write_text(json.dumps(content, indent=2, ensure_ascii=False))
+    
+    # Update workflow
+    workflow = await workflow_db.get_project_workflow(current_project.project_id)
+    if workflow:
+        if "sections" in content:
+            for section in content["sections"]:
+                if isinstance(section, dict) and "name" in section:
+                    workflow.paper_sections[section["name"]] = section.get("content", "")
+            await workflow_db.save_workflow(workflow)
+    
+    return json.dumps({
+        "success": True,
+        "draft_saved": str(draft_path),
+        "sections": list(content.get("sections", [])),
+    }, indent=2)
+
+
+async def _mark_complete() -> str:
+    """Mark paper as complete."""
+    current_project = await project_manager.get_current_project()
+    if not current_project:
+        return json.dumps({"error": "No active project"})
+    
+    workflow = await workflow_db.get_project_workflow(current_project.project_id)
+    if not workflow:
+        return json.dumps({"error": "No workflow"})
+    
+    workflow.stage = "completed"
+    await workflow_db.save_workflow(workflow)
+    
+    idea = await experiments_db.get_idea(workflow.approved_idea_id) if workflow.approved_idea_id else None
+    
+    return json.dumps({
+        "status": "PIPELINE_COMPLETE",
+        "message": (
+            "Congratulations! Research pipeline complete.\n\n"
+            "Summary:\n"
+            f"- Project: {current_project.project_id}\n"
+            f"- Idea: {idea.title if idea else 'Unknown'}\n"
+            f"- Verified claims: {len(workflow.verified_hypotheses)}\n"
+            f"- Figures: {len(workflow.figures_generated)}\n"
+            f"- Sections: {list(workflow.paper_sections.keys())}\n"
+            f"- Conference: {workflow.target_conference or 'Not set'}"
+        ),
+        "project_path": str(current_project.root_path),
+        "papers_dir": str(current_project.root_path / "papers"),
+    }, indent=2)
+
+
+async def main():
+    """Run the MCP server."""
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(read_stream, write_stream, server.create_initialization_options())
+
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())

@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "researcher-mcp": {
+      "command": "python",
+      "args": ["-m", "agents.researcher.server"],
+      "cwd": "/Users/mekashirskiy/yandexcup/vpn/research-mcp",
+      "env": {
+        "PYTHONPATH": "/Users/mekashirskiy/yandexcup/vpn/research-mcp"
+      }
+    },
+    "experimenter-mcp": {
+      "command": "python",
+      "args": ["-m", "agents.experimenter.server"],
+      "cwd": "/Users/mekashirskiy/yandexcup/vpn/research-mcp",
+      "env": {
+        "PYTHONPATH": "/Users/mekashirskiy/yandexcup/vpn/research-mcp"
+      }
+    },
+    "writer-mcp": {
+      "command": "python",
+      "args": ["-m", "agents.writer.server"],
+      "cwd": "/Users/mekashirskiy/yandexcup/vpn/research-mcp",
+      "env": {
+        "PYTHONPATH": "/Users/mekashirskiy/yandexcup/vpn/research-mcp"
+      }
+    }
+  }
+}
