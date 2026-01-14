@@ -37,7 +37,7 @@ CMD ["bash"]
 async def create_experiment_env(
     name: str,
     python: str = "3.10",
-    use_conda: bool = True,
+    use_conda: bool = False,
 ) -> str:
     if use_conda:
         conda_path = shutil.which("conda") or shutil.which("mamba")

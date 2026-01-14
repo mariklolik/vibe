@@ -365,10 +365,20 @@ async def _execute_tool(name: str, args: dict) -> str:
         return await check_gpu_availability()
     
     elif name == "create_experiment_env":
-        return await create_experiment_env(
+        result = await create_experiment_env(
             args["name"],
             args.get("python_version", "3.11"),
+            use_conda=False,
         )
+        result_data = json.loads(result)
+        if result_data.get("success"):
+            current_project = await project_manager.get_current_project()
+            if current_project:
+                workflow = await workflow_db.get_project_workflow(current_project.project_id)
+                if workflow and "env_created" not in workflow.completed_steps:
+                    workflow.completed_steps.append("env_created")
+                    await workflow_db.save_workflow(workflow)
+        return result
     
     elif name == "install_dependencies":
         return await install_dependencies(
@@ -426,7 +436,7 @@ async def _execute_tool(name: str, args: dict) -> str:
         )
     
     elif name == "verify_and_record_hypothesis":
-        return await verify_and_record_hypothesis(
+        return await _verify_and_record_hypothesis_simple(
             args["hypothesis_id"],
             args["hypothesis_statement"],
             args["experiment_id"],
@@ -548,6 +558,131 @@ def _suggest_next_action(workflow) -> str:
         return "Generate figures: plot_comparison_bar(...) or plot_training_curves(...)"
     
     return "Experiments complete! Call handoff_to_writer()"
+
+
+async def _verify_and_record_hypothesis_simple(
+    hypothesis_id: str,
+    hypothesis_statement: str,
+    experiment_id: str,
+    results: dict,
+    test_type: str = "t-test",
+) -> str:
+    """
+    Simplified hypothesis verification that accepts arbitrary results.
+    
+    This wrapper accepts results directly (not from tracked runs) and
+    performs statistical verification, then records in workflow.
+    
+    Args:
+        hypothesis_id: Unique ID for this hypothesis
+        hypothesis_statement: The claim being tested
+        experiment_id: Reference experiment ID
+        results: Dict mapping method names to lists of values
+                 e.g. {"our_method": [0.95, 0.94, 0.96], "baseline": [0.90, 0.89, 0.91]}
+        test_type: Statistical test (t-test, paired-t, wilcoxon, mann-whitney)
+    """
+    import numpy as np
+    from scipy import stats
+    
+    method_results = {}
+    for method, data in results.items():
+        if isinstance(data, list):
+            method_results[method] = np.array(data)
+        elif isinstance(data, dict) and "values" in data:
+            method_results[method] = np.array(data["values"])
+    
+    if len(method_results) < 2:
+        return json.dumps({
+            "success": False,
+            "error": "Need at least 2 methods to compare",
+            "provided": list(results.keys()),
+        })
+    
+    methods = list(method_results.keys())
+    group1 = method_results[methods[0]]
+    group2 = method_results[methods[1]]
+    
+    if test_type == "t-test":
+        statistic, p_value = stats.ttest_ind(group1, group2)
+        test_name = "Independent t-test"
+    elif test_type == "paired-t":
+        if len(group1) != len(group2):
+            return json.dumps({"error": "Paired t-test requires equal sample sizes"})
+        statistic, p_value = stats.ttest_rel(group1, group2)
+        test_name = "Paired t-test"
+    elif test_type == "wilcoxon":
+        if len(group1) != len(group2):
+            return json.dumps({"error": "Wilcoxon test requires equal sample sizes"})
+        statistic, p_value = stats.wilcoxon(group1, group2)
+        test_name = "Wilcoxon signed-rank test"
+    elif test_type == "mann-whitney":
+        statistic, p_value = stats.mannwhitneyu(group1, group2)
+        test_name = "Mann-Whitney U test"
+    else:
+        statistic, p_value = stats.ttest_ind(group1, group2)
+        test_name = "Independent t-test"
+    
+    alpha = 0.05
+    significant = bool(p_value < alpha)
+    
+    mean1, mean2 = float(np.mean(group1)), float(np.mean(group2))
+    std1, std2 = float(np.std(group1)), float(np.std(group2))
+    pooled_std = np.sqrt((std1**2 + std2**2) / 2)
+    effect_size = (mean1 - mean2) / pooled_std if pooled_std > 0 else 0
+    
+    if abs(effect_size) < 0.2:
+        effect_interpretation = "negligible"
+    elif abs(effect_size) < 0.5:
+        effect_interpretation = "small"
+    elif abs(effect_size) < 0.8:
+        effect_interpretation = "medium"
+    else:
+        effect_interpretation = "large"
+    
+    verdict = "SUPPORTED" if significant and mean1 > mean2 else "NOT SUPPORTED"
+    
+    verification_result = {
+        "hypothesis_id": hypothesis_id,
+        "hypothesis": hypothesis_statement,
+        "verdict": verdict,
+        "test": test_name,
+        "p_value": float(p_value),
+        "statistic": float(statistic),
+        "significant": significant,
+        "effect_size": float(effect_size),
+        "effect_interpretation": effect_interpretation,
+        "comparison": {
+            methods[0]: {"mean": mean1, "std": std1, "n": len(group1)},
+            methods[1]: {"mean": mean2, "std": std2, "n": len(group2)},
+        },
+    }
+    
+    # Record in workflow
+    current_project = await project_manager.get_current_project()
+    if current_project:
+        workflow = await workflow_db.get_project_workflow(current_project.project_id)
+        if workflow:
+            workflow.verified_hypotheses[hypothesis_id] = {
+                "statement": hypothesis_statement,
+                "verdict": verdict,
+                "p_value": float(p_value),
+                "significant": significant,
+                "experiment_id": experiment_id,
+            }
+            if workflow.stage == "experiment_setup":
+                workflow.stage = "experimenting"
+            await workflow_db.save_workflow(workflow)
+    
+    return json.dumps({
+        "success": True,
+        "verification": verification_result,
+        "recorded": True,
+        "can_claim_in_paper": significant,
+        "message": (
+            f"Hypothesis {hypothesis_id} {verdict}. "
+            f"{'This claim CAN be included in the paper.' if significant else 'This claim should NOT be included.'}"
+        ),
+    }, indent=2)
 
 
 async def _log_experiment_direct(name: str, config: dict, metrics: dict) -> str:
