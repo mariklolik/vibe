@@ -150,21 +150,25 @@ async def format_ablation_table(
     first_variant = list(ablations.keys())[0]
     metrics = list(ablations[first_variant].keys()) if isinstance(ablations[first_variant], dict) else ["score"]
     
-    # Get full model baseline
     baseline = ablations.get(full_model_name, {})
+    
+    col_spec = "l" + "c" * len(metrics) + ("c" if baseline else "")
+    delta_header = " & $\\Delta$" if baseline else ""
+    metrics_header = " & ".join(metrics)
     
     latex = f"""\\begin{{table}}[t]
 \\centering
 \\caption{{{caption}}}
 \\label{{{label}}}
-\\begin{{tabular}}{{l{'c' * len(metrics)}{'c' if baseline else ''}}}
+\\begin{{tabular}}{{{col_spec}}}
 \\toprule
-Configuration & {' & '.join(metrics)}{' & $\\Delta$' if baseline else ''} \\\\
+Configuration & {metrics_header}{delta_header} \\\\
 \\midrule
 """
     
     for variant, data in ablations.items():
-        row = [variant.replace("_", "\\_")]
+        escaped_variant = variant.replace("_", "\\_")
+        row = [escaped_variant]
         for metric in metrics:
             if isinstance(data, dict) and metric in data:
                 val = data[metric]
