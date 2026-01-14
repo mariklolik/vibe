@@ -9,6 +9,8 @@ from typing import Optional
 from src.apis.semantic_scholar import s2_client
 from src.db.papers_cache import papers_cache
 from src.db.experiments_db import experiments_db, Idea
+from src.db.workflow import workflow_db
+from src.project.manager import project_manager
 
 
 def _generate_confirmation_code() -> str:
@@ -263,12 +265,23 @@ async def approve_idea(
     
     await experiments_db.save_idea(idea)
     
+    # Update workflow state to unlock experiment phase
+    current_project = await project_manager.get_current_project()
+    if current_project:
+        workflow = await workflow_db.get_project_workflow(current_project.project_id)
+        if workflow:
+            hypotheses = getattr(idea, 'hypotheses', []) or [
+                f"Test: {idea.title}",
+            ]
+            await workflow_db.approve_idea(workflow, idea_id, hypotheses)
+    
     return json.dumps({
         "success": True,
         "message": f"✅ Idea approved: {idea.title}",
         "idea_id": idea_id,
         "status": "approved",
         "workflow_unlocked": True,
+        "workflow_stage": "experiment_setup",
         "next_steps": [
             "1. Call get_next_action() to see required workflow steps",
             "2. Use create_experiment_env() to set up environment",
