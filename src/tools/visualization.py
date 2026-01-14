@@ -14,9 +14,65 @@ import seaborn as sns
 from src.db.conferences import get_conference
 from src.db.workflow import workflow_db
 from src.project.manager import project_manager
+from src.tools.tracking import ExperimentTracker
 
 
 OUTPUTS_DIR = Path("./figures")
+
+
+async def get_verified_experiment_data(run_ids: list[str], metric: str) -> dict:
+    """
+    Get verified experiment data for visualization.
+    
+    This function ONLY returns metrics that were parsed from actual experiment logs.
+    Use this to ensure plots contain real data, not fabricated values.
+    
+    Args:
+        run_ids: List of run_ids from run_experiment()
+        metric: Metric name to extract
+    
+    Returns:
+        Dict mapping run names to metric values (or error if not verified)
+    """
+    current_project_obj = await project_manager.get_current_project()
+    if not current_project_obj:
+        return {"error": "No active project"}
+    
+    tracker = ExperimentTracker(current_project_obj.root_path)
+    results = {}
+    errors = []
+    
+    for run_id in run_ids:
+        run = await tracker.get_run(run_id)
+        if not run:
+            errors.append(f"Run not found: {run_id}")
+            continue
+        
+        if not run.is_verified:
+            errors.append(f"Run not verified: {run_id}. Call log_experiment() first.")
+            continue
+        
+        if metric not in run.parsed_metrics:
+            errors.append(f"Metric '{metric}' not found in run {run_id}. Available: {list(run.parsed_metrics.keys())}")
+            continue
+        
+        metric_data = run.parsed_metrics[metric]
+        if isinstance(metric_data, dict):
+            value = metric_data.get("final", metric_data.get("max", 0))
+        else:
+            value = metric_data
+        
+        results[run.name] = {
+            "value": value,
+            "run_id": run_id,
+            "verified": True,
+            "signature": run.experiment_signature,
+        }
+    
+    if errors:
+        return {"error": "; ".join(errors), "partial_results": results}
+    
+    return results
 
 
 async def _track_figure_generated(figure_path: str):
@@ -216,7 +272,101 @@ async def plot_comparison_bar(
         "methods": methods,
         "metric": metric,
         "workflow_updated": True,
+        "WARNING": (
+            "This function accepts arbitrary data. For verified results, "
+            "use plot_verified_comparison(run_ids, metric) instead."
+        ),
     })
+
+
+async def plot_verified_comparison(
+    run_ids: list[str],
+    metric: str,
+    output_path: Optional[str] = None,
+    conference: Optional[str] = None,
+) -> str:
+    """
+    Plot comparison using ONLY verified experiment data.
+    
+    This function pulls metrics directly from verified experiment logs,
+    ensuring no fabricated data can be plotted.
+    
+    Args:
+        run_ids: List of run_ids from run_experiment()
+        metric: Metric name to compare (e.g., "accuracy", "loss")
+        output_path: Optional output path for the figure
+        conference: Conference style to apply
+    
+    Returns:
+        JSON with plot path or error if data not verified
+    """
+    # Get verified data
+    data = await get_verified_experiment_data(run_ids, metric)
+    
+    if "error" in data:
+        return json.dumps({
+            "success": False,
+            "error": "UNVERIFIED_DATA",
+            "message": data["error"],
+            "partial_results": data.get("partial_results", {}),
+            "action_required": (
+                "Ensure all experiments are completed and call log_experiment(run_id) for each. "
+                "Then verify the metric exists in the experiment output."
+            ),
+        }, indent=2)
+    
+    if not data:
+        return json.dumps({
+            "success": False,
+            "error": "NO_DATA",
+            "message": "No verified data found for the provided run_ids",
+        })
+    
+    _ensure_output_dir()
+    _apply_conference_style(conference)
+    
+    methods = list(data.keys())
+    values = [data[m]["value"] for m in methods]
+    
+    fig, ax = plt.subplots(figsize=(5, 4))
+    
+    colors = COLOR_PALETTES["colorblind"][:len(methods)]
+    x = np.arange(len(methods))
+    
+    bars = ax.bar(x, values, color=colors, alpha=0.8)
+    
+    ax.set_xticks(x)
+    ax.set_xticklabels(methods, rotation=45, ha="right")
+    ax.set_ylabel(metric.capitalize())
+    ax.set_title(f"Verified Results: {metric}")
+    ax.grid(True, axis="y", alpha=0.3)
+    
+    for bar, val in zip(bars, values):
+        ax.annotate(f"{val:.3f}", xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                   ha="center", va="bottom", fontsize=8)
+    
+    plt.tight_layout()
+    
+    if output_path is None:
+        output_path = OUTPUTS_DIR / f"verified_{metric}.pdf"
+    else:
+        output_path = Path(output_path)
+    
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    
+    await _track_figure_generated(str(output_path))
+    
+    return json.dumps({
+        "success": True,
+        "output_path": str(output_path),
+        "methods": methods,
+        "metric": metric,
+        "values": {m: data[m]["value"] for m in methods},
+        "signatures": {m: data[m]["signature"] for m in methods},
+        "data_source": "VERIFIED - All values parsed from actual experiment logs",
+    }, indent=2)
 
 
 async def plot_ablation_table(

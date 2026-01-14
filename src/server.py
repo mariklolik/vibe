@@ -73,6 +73,8 @@ from src.tools.data_collection import (
 from src.tools.visualization import (
     plot_training_curves,
     plot_comparison_bar,
+    plot_verified_comparison,
+    get_verified_experiment_data,
     plot_ablation_table,
     plot_scatter,
     plot_heatmap,
@@ -545,6 +547,8 @@ TOOL_HANDLERS = {
     # Visualization
     "plot_training_curves": plot_training_curves,
     "plot_comparison_bar": plot_comparison_bar,
+    "plot_verified_comparison": plot_verified_comparison,
+    "get_verified_experiment_data": get_verified_experiment_data,
     "plot_ablation_table": plot_ablation_table,
     "plot_scatter": plot_scatter,
     "plot_heatmap": plot_heatmap,
@@ -1101,8 +1105,8 @@ TOOLS = [
     Tool(
         name="plot_comparison_bar",
         description=(
-            "REQUIRED for papers: Create bar chart comparing methods. "
-            "Must be called before cast_to_format. Generates publication-quality figures."
+            "Create bar chart comparing methods. Accepts arbitrary data. "
+            "WARNING: Use plot_verified_comparison() instead to ensure data comes from real experiments."
         ),
         inputSchema={
             "type": "object",
@@ -1113,6 +1117,50 @@ TOOLS = [
                 "conference": {"type": "string"},
             },
             "required": ["results", "metric"],
+        },
+    ),
+    Tool(
+        name="plot_verified_comparison",
+        description=(
+            "🔒 RECOMMENDED: Create bar chart using ONLY verified experiment data. "
+            "This function pulls metrics directly from experiment logs - no fabrication possible. "
+            "Use this instead of plot_comparison_bar for integrity."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "run_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of run_ids from run_experiment()",
+                },
+                "metric": {
+                    "type": "string",
+                    "description": "Metric name (e.g., 'accuracy', 'loss', 'f1')",
+                },
+                "output_path": {"type": "string"},
+                "conference": {"type": "string"},
+            },
+            "required": ["run_ids", "metric"],
+        },
+    ),
+    Tool(
+        name="get_verified_experiment_data",
+        description=(
+            "Get verified experiment metrics for use in visualizations. "
+            "Returns ONLY data parsed from actual experiment logs. "
+            "Use this to build custom visualizations with verified data."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "run_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "metric": {"type": "string"},
+            },
+            "required": ["run_ids", "metric"],
         },
     ),
     Tool(
