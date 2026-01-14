@@ -9,6 +9,23 @@ import httpx
 
 
 @dataclass
+class PaperMetricsInfo:
+    """Paper metrics extracted from the paper."""
+    word_count: int = 0
+    figure_count: int = 0
+    table_count: int = 0
+    page_count: int = 0
+    
+    def to_dict(self) -> dict:
+        return {
+            "word_count": self.word_count,
+            "figure_count": self.figure_count,
+            "table_count": self.table_count,
+            "page_count": self.page_count,
+        }
+
+
+@dataclass
 class HFPaper:
     paper_id: str
     title: str
@@ -18,9 +35,10 @@ class HFPaper:
     upvotes: int
     arxiv_id: Optional[str]
     github_url: Optional[str]
+    metrics: Optional[PaperMetricsInfo] = None
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "paper_id": self.paper_id,
             "title": self.title,
             "summary": self.summary,
@@ -30,6 +48,9 @@ class HFPaper:
             "arxiv_id": self.arxiv_id,
             "github_url": self.github_url,
         }
+        if self.metrics:
+            result["metrics"] = self.metrics.to_dict()
+        return result
 
 
 class HuggingFaceClient:
@@ -300,6 +321,80 @@ class HuggingFaceClient:
             pass
         
         return None
+
+    async def fetch_trending_with_metrics(
+        self,
+        topic: Optional[str] = None,
+        max_results: int = 10,
+    ) -> list[HFPaper]:
+        """
+        Fetch trending papers and extract metrics from each.
+        
+        This is used to set target metrics for paper writing.
+        Extracts word count, figure count, etc. from each paper.
+        
+        Args:
+            topic: Optional topic to filter papers
+            max_results: Maximum number of papers to fetch
+        
+        Returns:
+            List of HFPaper with metrics populated
+        """
+        from src.context.extractor import extract_paper_metrics
+        
+        papers = await self.fetch_trending(topic=topic, max_results=max_results)
+        
+        enriched_papers = []
+        for paper in papers:
+            if paper.arxiv_id:
+                try:
+                    metrics = await extract_paper_metrics(paper.arxiv_id)
+                    paper.metrics = PaperMetricsInfo(
+                        word_count=metrics.word_count,
+                        figure_count=metrics.figure_count,
+                        table_count=metrics.table_count,
+                        page_count=metrics.page_count,
+                    )
+                except Exception:
+                    paper.metrics = PaperMetricsInfo()
+            enriched_papers.append(paper)
+        
+        return enriched_papers
+    
+    async def get_average_metrics(
+        self,
+        topic: Optional[str] = None,
+        sample_size: int = 5,
+    ) -> PaperMetricsInfo:
+        """
+        Get average paper metrics from trending papers.
+        
+        Useful for setting realistic targets for paper length and figures.
+        
+        Args:
+            topic: Topic to filter papers by
+            sample_size: Number of papers to sample
+        
+        Returns:
+            PaperMetricsInfo with averaged values
+        """
+        papers = await self.fetch_trending_with_metrics(topic=topic, max_results=sample_size)
+        
+        if not papers:
+            return PaperMetricsInfo(word_count=5000, figure_count=6, table_count=3, page_count=9)
+        
+        papers_with_metrics = [p for p in papers if p.metrics and p.metrics.word_count > 0]
+        
+        if not papers_with_metrics:
+            return PaperMetricsInfo(word_count=5000, figure_count=6, table_count=3, page_count=9)
+        
+        n = len(papers_with_metrics)
+        return PaperMetricsInfo(
+            word_count=sum(p.metrics.word_count for p in papers_with_metrics) // n,
+            figure_count=sum(p.metrics.figure_count for p in papers_with_metrics) // n,
+            table_count=sum(p.metrics.table_count for p in papers_with_metrics) // n,
+            page_count=sum(p.metrics.page_count for p in papers_with_metrics) // n,
+        )
 
     async def close(self):
         await self.client.aclose()
