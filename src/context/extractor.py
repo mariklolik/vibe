@@ -538,3 +538,159 @@ async def extract_metrics_from_papers(arxiv_ids: list[str]) -> PaperMetrics:
         return PaperMetrics.default()
     
     return PaperMetrics.average(metrics_list)
+
+
+async def extract_writing_style_context(arxiv_ids: list[str]) -> dict:
+    """
+    Extract writing style context from reference papers for style-consistent writing.
+    
+    This provides style guidance to the model before writing paper sections.
+    The model should adopt a similar writing style to the reference papers.
+    
+    Args:
+        arxiv_ids: List of arXiv IDs to analyze
+    
+    Returns:
+        Dict with style metrics and example paragraphs for prompting
+    """
+    extractor = PaperExtractor()
+    
+    styles = []
+    example_paragraphs = []
+    
+    for arxiv_id in arxiv_ids:
+        try:
+            structure = await extractor.extract_from_arxiv_html(arxiv_id)
+            if structure:
+                styles.append(structure.writing_style)
+                
+                examples = await _extract_example_paragraphs(arxiv_id)
+                example_paragraphs.extend(examples)
+        except Exception:
+            continue
+    
+    if not styles:
+        return {
+            "error": "Could not extract style from any papers",
+            "default_style": {
+                "avg_sentence_length": 20,
+                "passive_voice_ratio": 0.3,
+                "first_person": True,
+                "formality": "high",
+            },
+        }
+    
+    n = len(styles)
+    avg_style = {
+        "avg_sentence_length": sum(s.avg_sentence_length for s in styles) / n,
+        "passive_voice_ratio": sum(s.passive_voice_ratio for s in styles) / n,
+        "first_person_usage": any(s.first_person_usage for s in styles),
+        "avg_paragraph_length": sum(s.avg_paragraph_length for s in styles) / n,
+        "formality_score": sum(s.formality_score for s in styles) / n,
+    }
+    
+    formality_desc = "high" if avg_style["formality_score"] > 0.7 else "moderate"
+    voice_desc = "passive preferred" if avg_style["passive_voice_ratio"] > 0.4 else "active preferred"
+    person_desc = "first person (we)" if avg_style["first_person_usage"] else "impersonal"
+    
+    return {
+        "style_metrics": avg_style,
+        "papers_analyzed": len(styles),
+        "example_paragraphs": example_paragraphs[:5],
+        "writing_instruction": (
+            f"Write in academic style matching the reference papers:\n"
+            f"- Sentence length: ~{avg_style['avg_sentence_length']:.0f} words per sentence\n"
+            f"- Voice: {voice_desc}\n"
+            f"- Person: {person_desc}\n"
+            f"- Formality: {formality_desc}\n"
+            f"- Paragraph length: ~{avg_style['avg_paragraph_length']:.0f} words\n\n"
+            f"Study the example paragraphs below and match their style."
+        ),
+    }
+
+
+async def _extract_example_paragraphs(arxiv_id: str) -> list[str]:
+    """Extract representative paragraphs from a paper."""
+    url = f"https://arxiv.org/html/{arxiv_id}v1"
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=30) as response:
+                if response.status != 200:
+                    return []
+                html = await response.text()
+    except Exception:
+        return []
+    
+    paragraph_pattern = re.compile(
+        r"<p[^>]*class=\"ltx_p\"[^>]*>(.*?)</p>",
+        re.DOTALL | re.IGNORECASE
+    )
+    
+    paragraphs = []
+    for match in paragraph_pattern.finditer(html):
+        text = re.sub(r"<[^>]+>", " ", match.group(1))
+        text = " ".join(text.split())
+        
+        if 50 < len(text.split()) < 150:
+            if not any(skip in text.lower() for skip in ["http://", "https://", "@", "github"]):
+                paragraphs.append(text)
+                if len(paragraphs) >= 3:
+                    break
+    
+    return paragraphs
+
+
+async def get_paper_context_for_writing(paper_ids: list[str]) -> dict:
+    """
+    Get comprehensive context for paper writing including style and structure.
+    
+    This should be called before the model starts writing each section.
+    It provides both structural targets and style guidance.
+    
+    Args:
+        paper_ids: List of paper IDs (arxiv IDs or cached paper IDs)
+    
+    Returns:
+        Complete context dict for prompting the model
+    """
+    arxiv_ids = []
+    for pid in paper_ids:
+        if pid.startswith("arxiv:"):
+            arxiv_ids.append(pid[6:])
+        elif pid.startswith("hf:"):
+            from src.db.papers_cache import papers_cache
+            cached = await papers_cache.get_paper(pid)
+            if cached and cached.arxiv_id:
+                arxiv_ids.append(cached.arxiv_id)
+        else:
+            arxiv_ids.append(pid)
+    
+    style_context = await extract_writing_style_context(arxiv_ids)
+    metrics = await extract_metrics_from_papers(arxiv_ids)
+    
+    structure_context = []
+    for arxiv_id in arxiv_ids[:3]:
+        context = await extract_paper_context(arxiv_id)
+        if context:
+            structure_context.append({
+                "arxiv_id": arxiv_id,
+                "title": context.get("title"),
+                "sections": [
+                    {"name": s["name"], "word_count": s["word_count"]}
+                    for s in context.get("sections", [])
+                ],
+            })
+    
+    return {
+        "target_metrics": metrics.to_dict(),
+        "style_guidance": style_context,
+        "structure_examples": structure_context,
+        "instruction_for_model": (
+            "Before writing, review:\n"
+            "1. Target metrics for word count and figures\n"
+            "2. Writing style from reference papers\n"
+            "3. Section structure examples\n\n"
+            "Match the style and length of the reference papers."
+        ),
+    }
