@@ -154,20 +154,39 @@ class PapersCache:
     async def search(self, query: str, max_results: int = 10) -> list[CachedPaper]:
         await self._ensure_initialized()
         
+        escaped_query = self._escape_fts_query(query)
+        
         papers = []
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("""
-                SELECT p.* FROM papers p
-                JOIN papers_fts fts ON p.paper_id = fts.paper_id
-                WHERE papers_fts MATCH ?
-                ORDER BY rank
-                LIMIT ?
-            """, (query, max_results)) as cursor:
-                async for row in cursor:
-                    papers.append(self._row_to_paper(row))
+            try:
+                async with db.execute("""
+                    SELECT p.* FROM papers p
+                    JOIN papers_fts fts ON p.paper_id = fts.paper_id
+                    WHERE papers_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """, (escaped_query, max_results)) as cursor:
+                    async for row in cursor:
+                        papers.append(self._row_to_paper(row))
+            except Exception:
+                async with db.execute("""
+                    SELECT * FROM papers 
+                    WHERE title LIKE ? OR abstract LIKE ?
+                    LIMIT ?
+                """, (f"%{query}%", f"%{query}%", max_results)) as cursor:
+                    async for row in cursor:
+                        papers.append(self._row_to_paper(row))
         
         return papers
+    
+    def _escape_fts_query(self, query: str) -> str:
+        """Escape query for FTS5 MATCH to prevent syntax errors."""
+        escaped = query.replace('"', '""')
+        tokens = escaped.split()
+        if len(tokens) == 1:
+            return f'"{escaped}"'
+        return " OR ".join(f'"{token}"' for token in tokens)
 
     async def get_recent(
         self,
