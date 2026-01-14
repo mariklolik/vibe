@@ -1,27 +1,27 @@
 {
   "mcpServers": {
     "researcher-mcp": {
-      "command": "python",
+      "command": "/home/mekashirskiy/research-mcp/.venv/bin/python",
       "args": ["-m", "agents.researcher.server"],
-      "cwd": "/Users/mekashirskiy/yandexcup/vpn/research-mcp",
+      "cwd": "/home/mekashirskiy/research-mcp",
       "env": {
-        "PYTHONPATH": "/Users/mekashirskiy/yandexcup/vpn/research-mcp"
+        "PYTHONPATH": "/home/mekashirskiy/research-mcp"
       }
     },
     "experimenter-mcp": {
-      "command": "python",
+      "command": "/home/mekashirskiy/research-mcp/.venv/bin/python",
       "args": ["-m", "agents.experimenter.server"],
-      "cwd": "/Users/mekashirskiy/yandexcup/vpn/research-mcp",
+      "cwd": "/home/mekashirskiy/research-mcp",
       "env": {
-        "PYTHONPATH": "/Users/mekashirskiy/yandexcup/vpn/research-mcp"
+        "PYTHONPATH": "/home/mekashirskiy/research-mcp"
       }
     },
     "writer-mcp": {
-      "command": "python",
+      "command": "/home/mekashirskiy/research-mcp/.venv/bin/python",
       "args": ["-m", "agents.writer.server"],
-      "cwd": "/Users/mekashirskiy/yandexcup/vpn/research-mcp",
+      "cwd": "/home/mekashirskiy/research-mcp",
       "env": {
-        "PYTHONPATH": "/Users/mekashirskiy/yandexcup/vpn/research-mcp"
+        "PYTHONPATH": "/home/mekashirskiy/research-mcp"
       }
     }
   }
