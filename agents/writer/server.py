@@ -172,12 +172,11 @@ TOOL_DEFINITIONS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "name": {"type": "string"},
-                "steps": {"type": "array", "items": {"type": "string"}},
-                "inputs": {"type": "array", "items": {"type": "string"}},
-                "output": {"type": "string"},
+                "steps": {"type": "array", "items": {"type": "string"}, "description": "Algorithm steps"},
+                "caption": {"type": "string", "description": "Algorithm caption/title"},
+                "label": {"type": "string", "default": "alg:main", "description": "LaTeX label"},
             },
-            "required": ["name", "steps"],
+            "required": ["steps", "caption"],
         },
     ),
     Tool(
@@ -348,10 +347,9 @@ async def _execute_tool(name: str, args: dict) -> str:
     
     elif name == "format_algorithm":
         return await format_algorithm(
-            args["name"],
             args["steps"],
-            args.get("inputs"),
-            args.get("output"),
+            args.get("caption", "Algorithm"),
+            args.get("label", "alg:main"),
         )
     
     elif name == "get_citations_for_topic":
@@ -385,10 +383,10 @@ async def _execute_tool(name: str, args: dict) -> str:
     elif name == "check_paper_completeness":
         current_project = await project_manager.get_current_project()
         if current_project:
-            draft_path = Path(current_project.project_dir) / "papers" / "drafts" / "latest.tex"
+            draft_path = Path(current_project.root_path) / "papers" / "drafts" / "latest.tex"
             if draft_path.exists():
                 return await check_paper_completeness(latex_file=str(draft_path))
-            for tex_file in (Path(current_project.project_dir) / "papers" / "drafts").glob("*.tex"):
+            for tex_file in (Path(current_project.root_path) / "papers" / "drafts").glob("*.tex"):
                 return await check_paper_completeness(latex_file=str(tex_file))
         return await check_paper_completeness()
     
@@ -705,7 +703,7 @@ async def _mark_complete() -> str:
         warnings.append("No figures generated - paper may lack visual results")
     
     # Check for draft files
-    draft_dir = Path(current_project.project_dir) / "papers" / "drafts"
+    draft_dir = Path(current_project.root_path) / "papers" / "drafts"
     has_draft = draft_dir.exists() and any(draft_dir.glob("*.tex"))
     if not has_draft:
         return json.dumps({
@@ -731,8 +729,8 @@ async def _mark_complete() -> str:
             f"- Sections: {list(workflow.paper_sections.keys())}\n"
             f"- Conference: {workflow.target_conference or 'Not set'}"
         ),
-        "project_path": str(current_project.project_dir),
-        "papers_dir": str(Path(current_project.project_dir) / "papers"),
+        "project_path": str(current_project.root_path),
+        "papers_dir": str(Path(current_project.root_path) / "papers"),
     }
     
     if warnings:
