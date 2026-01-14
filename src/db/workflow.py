@@ -41,6 +41,15 @@ class WorkflowState:
     experiment_results: dict = field(default_factory=dict)
     experiment_runs: list[str] = field(default_factory=list)  # Tracked run IDs
     
+    # Hypothesis verification (MANDATORY before claims)
+    verified_hypotheses: dict = field(default_factory=dict)  # {hypo_id: verification_result}
+    
+    # Git worktrees for parallel experiments
+    active_worktrees: list[str] = field(default_factory=list)
+    
+    # Paper IR path
+    paper_ir_path: Optional[str] = None
+    
     # Writing
     paper_sections: dict = field(default_factory=dict)  # {section_name: content}
     figures_generated: list[str] = field(default_factory=list)
@@ -49,6 +58,11 @@ class WorkflowState:
     
     # GitHub
     github_url: Optional[str] = None
+    
+    # Persona switching (blocking like idea approval)
+    current_persona: str = "researcher"  # researcher, experimenter, writer
+    pending_persona_switch: Optional[str] = None  # Target persona awaiting confirmation
+    persona_confirmation_code: Optional[str] = None  # 4-digit code for switching
     
     # Metadata
     created_at: str = ""
@@ -73,11 +87,17 @@ class WorkflowState:
             "completed_experiments": self.completed_experiments,
             "experiment_results": self.experiment_results,
             "experiment_runs": self.experiment_runs,
+            "verified_hypotheses": self.verified_hypotheses,
+            "active_worktrees": self.active_worktrees,
+            "paper_ir_path": self.paper_ir_path,
             "paper_sections": self.paper_sections,
             "figures_generated": self.figures_generated,
             "target_conference": self.target_conference,
             "paper_iterations": self.paper_iterations,
             "github_url": self.github_url,
+            "current_persona": self.current_persona,
+            "pending_persona_switch": self.pending_persona_switch,
+            "persona_confirmation_code": self.persona_confirmation_code,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "last_action": self.last_action,
@@ -102,11 +122,17 @@ class WorkflowState:
             completed_experiments=data.get("completed_experiments", []),
             experiment_results=data.get("experiment_results", {}),
             experiment_runs=data.get("experiment_runs", []),
+            verified_hypotheses=data.get("verified_hypotheses", {}),
+            active_worktrees=data.get("active_worktrees", []),
+            paper_ir_path=data.get("paper_ir_path"),
             paper_sections=data.get("paper_sections", {}),
             figures_generated=data.get("figures_generated", []),
             target_conference=data.get("target_conference"),
             paper_iterations=data.get("paper_iterations", 0),
             github_url=data.get("github_url"),
+            current_persona=data.get("current_persona", "researcher"),
+            pending_persona_switch=data.get("pending_persona_switch"),
+            persona_confirmation_code=data.get("persona_confirmation_code"),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
             last_action=data.get("last_action"),

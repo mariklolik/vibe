@@ -1,6 +1,7 @@
 """ResearchMCP Server - End-to-end AI research pipeline."""
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -8,10 +9,19 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
+# Persona management for dynamic tool filtering
+from src.personas import (
+    persona_manager,
+    PersonaType,
+    get_tools_for_persona,
+    PERSONAS,
+)
+
 # Data collection and aggregation
 from src.tools.aggregation import (
     fetch_arxiv_trending,
     fetch_hf_trending,
+    fetch_hf_trending_with_metrics,
     search_papers,
     get_paper_details,
     clone_paper_code,
@@ -71,13 +81,15 @@ from src.tools.visualization import (
     style_for_conference,
 )
 
-# Verification
+# Verification (includes mandatory verification before paper claims)
 from src.tools.verification import (
     verify_hypothesis,
     check_significance,
     detect_anomalies,
     compare_to_baselines,
     generate_results_summary,
+    verify_and_record_hypothesis,
+    check_claims_verified,
 )
 
 # Writing utilities (simple formatting tools, not content generation)
@@ -95,6 +107,9 @@ from src.tools.writing import (
     save_to_file,
     check_paper_completeness,
     expand_paper,
+    get_project_writing_context,
+    extract_style_from_context,
+    get_verified_claims_for_writing,
 )
 
 # Formatting for conferences
@@ -112,24 +127,29 @@ from src.tools.formatting import (
 # Context extraction
 from src.context.extractor import extract_paper_context
 
-# Workflow orchestration
+# Workflow orchestration (includes expansion loop)
 from src.tools.workflow_tools import (
     get_next_action,
     get_workflow_checklist,
     mark_step_complete,
     set_target_metrics_from_papers,
+    check_and_expand_paper,
+    get_verified_claims,
 )
 
 # Experiment tracking
 from src.tools.tracking import (
     log_experiment,
     get_experiment_history,
+    get_real_metrics,
 )
 
-# Paper metrics extraction
+# Paper metrics and style extraction
 from src.context.extractor import (
     extract_paper_metrics,
     extract_metrics_from_papers,
+    extract_writing_style_context,
+    get_paper_context_for_writing,
 )
 
 # Project management
@@ -200,21 +220,225 @@ async def create_workflow(project_id: str) -> str:
 
 async def get_workflow_status(workflow_id: str) -> str:
     """Get current workflow status and progress."""
-    import json
     workflow = await workflow_db.get_workflow(workflow_id)
     if not workflow:
         return json.dumps({"error": f"Workflow not found: {workflow_id}"})
     return json.dumps(workflow.get_progress_summary(), indent=2)
 
 
+def _generate_persona_code() -> str:
+    """Generate a 4-digit confirmation code for persona switching."""
+    import random
+    return str(random.randint(1000, 9999))
+
+
+async def switch_persona(persona: str) -> str:
+    """
+    Request to switch to a different persona. Requires user confirmation.
+    
+    This tool initiates a persona switch that MUST be confirmed by the user.
+    Similar to idea approval, the model cannot switch personas without user consent.
+    
+    Personas:
+    - researcher: Paper discovery, idea generation, approval workflow
+    - experimenter: Experiment setup, execution, verification
+    - writer: Paper writing, formatting, publication
+    
+    Args:
+        persona: One of 'researcher', 'experimenter', 'writer'
+    
+    Returns:
+        Instructions for user to confirm the switch
+    """
+    try:
+        persona_type = PersonaType(persona.lower())
+    except ValueError:
+        return json.dumps({
+            "error": f"Invalid persona: {persona}",
+            "valid_personas": ["researcher", "experimenter", "writer"],
+        })
+    
+    current_project_obj = await project_manager.get_current_project()
+    if not current_project_obj:
+        return json.dumps({
+            "error": "No active project",
+            "action_required": "Create a project first",
+        })
+    
+    workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
+    if not workflow:
+        return json.dumps({
+            "error": "No workflow found",
+            "action_required": "Create a workflow first",
+        })
+    
+    if workflow.current_persona == persona.lower():
+        persona_info = PERSONAS[persona_type]
+        return json.dumps({
+            "message": f"Already in {persona} persona",
+            "current_persona": persona,
+            "available_tools": persona_info.tools,
+        }, indent=2)
+    
+    confirmation_code = _generate_persona_code()
+    workflow.pending_persona_switch = persona.lower()
+    workflow.persona_confirmation_code = confirmation_code
+    await workflow_db.save_workflow(workflow)
+    
+    persona_info = PERSONAS[persona_type]
+    
+    return json.dumps({
+        "status": "AWAITING_USER_CONFIRMATION",
+        "message": (
+            f"Persona switch to '{persona}' requested. "
+            "USER must confirm by typing the command below."
+        ),
+        "current_persona": workflow.current_persona,
+        "requested_persona": persona,
+        "confirmation_command": f"SWITCH {persona} CODE {confirmation_code}",
+        "new_tools_available": persona_info.tools[:10],
+        "ai_instruction": (
+            "STOP. Do NOT call confirm_persona_switch yourself. "
+            "Wait for the human user to type the confirmation command."
+        ),
+    }, indent=2)
+
+
+async def confirm_persona_switch(persona: str, confirmation_code: str) -> str:
+    """
+    HUMAN USER ONLY - Confirm a persona switch with the confirmation code.
+    
+    This tool requires a confirmation code that is ONLY shown to the human user.
+    AI assistants MUST NOT call this tool - wait for user to type the command.
+    
+    Args:
+        persona: The persona to switch to
+        confirmation_code: The 4-digit code shown to the user
+    
+    Returns:
+        Confirmation of successful switch or error
+    """
+    current_project_obj = await project_manager.get_current_project()
+    if not current_project_obj:
+        return json.dumps({"error": "No active project"})
+    
+    workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
+    if not workflow:
+        return json.dumps({"error": "No workflow found"})
+    
+    if not workflow.pending_persona_switch:
+        return json.dumps({
+            "error": "NO_PENDING_SWITCH",
+            "message": "No persona switch is pending. Call switch_persona() first.",
+        })
+    
+    if not confirmation_code:
+        return json.dumps({
+            "error": "CONFIRMATION_CODE_REQUIRED",
+            "message": "Confirmation code is required. Only the human user has the code.",
+            "ai_instruction": "STOP. Wait for user to type the confirmation command.",
+        })
+    
+    if confirmation_code != workflow.persona_confirmation_code:
+        return json.dumps({
+            "error": "INVALID_CODE",
+            "message": "The confirmation code is incorrect.",
+            "ai_instruction": "STOP. Do not retry. Wait for user.",
+        })
+    
+    if persona.lower() != workflow.pending_persona_switch:
+        return json.dumps({
+            "error": "PERSONA_MISMATCH",
+            "message": f"Requested switch was to '{workflow.pending_persona_switch}', not '{persona}'",
+        })
+    
+    try:
+        persona_type = PersonaType(persona.lower())
+    except ValueError:
+        return json.dumps({"error": f"Invalid persona: {persona}"})
+    
+    workflow.current_persona = persona.lower()
+    workflow.pending_persona_switch = None
+    workflow.persona_confirmation_code = None
+    await workflow_db.save_workflow(workflow)
+    
+    persona_manager.set_override(persona_type)
+    
+    persona_info = PERSONAS[persona_type]
+    
+    return json.dumps({
+        "success": True,
+        "message": f"✅ Persona switched to '{persona}'",
+        "active_persona": persona,
+        "description": persona_info.description,
+        "available_tools": persona_info.tools,
+        "tool_count": len(persona_info.tools),
+        "next_steps": _get_persona_next_steps(persona_type),
+    }, indent=2)
+
+
+def _get_persona_next_steps(persona_type: PersonaType) -> list[str]:
+    """Get next steps for a persona."""
+    if persona_type == PersonaType.RESEARCHER:
+        return [
+            "Use fetch_arxiv_trending or search_papers to gather papers",
+            "Use generate_ideas to create research ideas",
+            "Wait for user to approve an idea",
+        ]
+    elif persona_type == PersonaType.EXPERIMENTER:
+        return [
+            "Use create_experiment_env to set up environment",
+            "Use run_experiment to execute experiments",
+            "Use verify_and_record_hypothesis to verify results",
+        ]
+    else:  # WRITER
+        return [
+            "Use get_project_writing_context to read gathered papers",
+            "Use extract_style_from_context to analyze writing style",
+            "Use get_verified_claims_for_writing to get verifiable claims",
+            "Use cast_to_format to generate conference paper",
+        ]
+
+
+async def get_active_persona() -> str:
+    """Get the currently active persona and its available tools."""
+    current_project_obj = await project_manager.get_current_project()
+    
+    workflow_stage = "context_gathering"
+    if current_project_obj:
+        workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
+        if workflow:
+            workflow_stage = workflow.stage
+    
+    active_persona = persona_manager.get_active_persona(workflow_stage)
+    
+    return json.dumps({
+        "active_persona": active_persona.name.value,
+        "workflow_stage": workflow_stage,
+        "description": active_persona.description,
+        "available_tools": active_persona.tools,
+        "tool_count": len(active_persona.tools),
+        "message": (
+            "Tools are automatically filtered based on workflow stage. "
+            "Use switch_persona() to manually override."
+        ),
+    }, indent=2)
+
+
 TOOL_HANDLERS = {
     # Aggregation
     "fetch_arxiv_trending": fetch_arxiv_trending,
     "fetch_hf_trending": fetch_hf_trending,
+    "fetch_hf_trending_with_metrics": fetch_hf_trending_with_metrics,
     "search_papers": search_papers,
     "get_paper_details": get_paper_details,
     "clone_paper_code": clone_paper_code,
     "extract_paper_context": extract_paper_context,
+    
+    # Style and metrics extraction
+    "extract_writing_style_context": extract_writing_style_context,
+    "get_paper_context_for_writing": get_paper_context_for_writing,
+    "get_writing_style_context": extract_writing_style_context,
     
     # Ideas
     "generate_ideas": generate_ideas,
@@ -232,11 +456,17 @@ TOOL_HANDLERS = {
     "get_current_project": get_current_project,
     "set_current_project": set_current_project,
     
-    # Workflow
+    # Workflow orchestration
     "create_workflow": create_workflow,
     "get_workflow_status": get_workflow_status,
     "get_next_action": get_next_action,
     "get_workflow_checklist": get_workflow_checklist,
+    "check_and_expand_paper": check_and_expand_paper,
+    
+    # Persona management
+    "switch_persona": switch_persona,
+    "confirm_persona_switch": confirm_persona_switch,
+    "get_active_persona": get_active_persona,
     
     # Environment
     "create_experiment_env": create_experiment_env,
@@ -272,12 +502,15 @@ TOOL_HANDLERS = {
     "generate_architecture_diagram": generate_architecture_diagram,
     "style_for_conference": style_for_conference,
     
-    # Verification
+    # Verification (mandatory before paper claims)
     "verify_hypothesis": verify_hypothesis,
+    "verify_and_record_hypothesis": verify_and_record_hypothesis,
+    "check_claims_verified": check_claims_verified,
     "check_significance": check_significance,
     "detect_anomalies": detect_anomalies,
     "compare_to_baselines": compare_to_baselines,
     "generate_results_summary": generate_results_summary,
+    "get_verified_claims": get_verified_claims,
     
     # Writing utilities
     "estimate_paper_structure": estimate_paper_structure,
@@ -303,6 +536,9 @@ TOOL_HANDLERS = {
     # Paper completeness and expansion
     "check_paper_completeness": check_paper_completeness,
     "expand_paper": expand_paper,
+    "get_project_writing_context": get_project_writing_context,
+    "extract_style_from_context": extract_style_from_context,
+    "get_verified_claims_for_writing": get_verified_claims_for_writing,
     
     # GitHub integration
     "create_github_repo": create_github_repo,
@@ -311,6 +547,7 @@ TOOL_HANDLERS = {
     # Experiment tracking
     "log_experiment": log_experiment,
     "get_experiment_history": get_experiment_history,
+    "get_real_metrics": get_real_metrics,
     
     # Paper metrics
     "extract_paper_metrics": extract_paper_metrics,
@@ -1219,6 +1456,54 @@ TOOLS = [
             "properties": {},
         },
     ),
+    Tool(
+        name="get_project_writing_context",
+        description=(
+            "Get all papers gathered for the current project from the context folder. "
+            "Use this to inform your writing with the actual papers you gathered during research."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+    Tool(
+        name="extract_style_from_context",
+        description=(
+            "Analyze gathered papers to extract writing style patterns. "
+            "Returns sentence length, first person usage, formality level, common phrases."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+    Tool(
+        name="get_verified_claims_for_writing",
+        description=(
+            "Get only the verified claims that can be included in the paper. "
+            "Returns claims verified through verify_and_record_hypothesis with real experiment data."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+    Tool(
+        name="get_real_metrics",
+        description=(
+            "Get only the metrics parsed from actual experiment log files. "
+            "Returns ONLY metrics that were extracted from real stdout logs, not user-provided."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_dir": {"type": "string", "description": "Path to the project directory"},
+                "run_id": {"type": "string", "description": "The run_id from run_experiment()"},
+            },
+            "required": ["project_dir", "run_id"],
+        },
+    ),
     
     # === GITHUB INTEGRATION ===
     Tool(
@@ -1314,28 +1599,298 @@ TOOLS = [
             "required": ["arxiv_ids"],
         },
     ),
+    
+    # === PERSONA MANAGEMENT ===
+    Tool(
+        name="switch_persona",
+        description=(
+            "Request to switch persona. Requires user confirmation. "
+            "Personas: researcher (paper discovery, ideas), experimenter (experiments, verification), writer (paper writing)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "persona": {
+                    "type": "string",
+                    "enum": ["researcher", "experimenter", "writer"],
+                    "description": "The persona to switch to",
+                },
+            },
+            "required": ["persona"],
+        },
+    ),
+    Tool(
+        name="confirm_persona_switch",
+        description=(
+            "HUMAN USER ONLY - Confirm a persona switch with the confirmation code. "
+            "AI must NOT call this - wait for user to type the command."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "persona": {
+                    "type": "string",
+                    "enum": ["researcher", "experimenter", "writer"],
+                    "description": "The persona to switch to",
+                },
+                "confirmation_code": {
+                    "type": "string",
+                    "description": "4-digit code shown only to human user. AI must NOT guess this.",
+                },
+            },
+            "required": ["persona", "confirmation_code"],
+        },
+    ),
+    Tool(
+        name="get_active_persona",
+        description="Get the currently active persona and its available tools.",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    
+    # === EXPANSION LOOP ===
+    Tool(
+        name="check_and_expand_paper",
+        description=(
+            "Check paper completeness and trigger expansion if too short. "
+            "Generates new hypotheses and queues experiments if paper doesn't meet target metrics."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="get_verified_claims",
+        description=(
+            "Get all verified claims that can be included in the paper. "
+            "Only claims that passed hypothesis verification can be cited."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    
+    # === MANDATORY VERIFICATION ===
+    Tool(
+        name="verify_and_record_hypothesis",
+        description=(
+            "MANDATORY: Verify a hypothesis and record the result. "
+            "Must be called before any claim can be added to the paper."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "hypothesis_id": {"type": "string", "description": "Unique identifier for the hypothesis"},
+                "hypothesis_statement": {"type": "string", "description": "The claim being tested"},
+                "experiment_id": {"type": "string", "description": "Which experiment produced the results"},
+                "results": {"type": "object", "description": "Dict with method names as keys and result arrays"},
+                "test_type": {
+                    "type": "string",
+                    "enum": ["t-test", "paired-t", "wilcoxon", "mann-whitney"],
+                    "default": "t-test",
+                },
+            },
+            "required": ["hypothesis_id", "hypothesis_statement", "experiment_id", "results"],
+        },
+    ),
+    Tool(
+        name="check_claims_verified",
+        description=(
+            "Check if all claims have been verified before paper submission. "
+            "Blocks paper if unverified claims exist."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "claims": {"type": "array", "items": {"type": "string"}, "description": "List of hypothesis IDs to check"},
+            },
+            "required": ["claims"],
+        },
+    ),
+    
+    # === STYLE CONTEXT ===
+    Tool(
+        name="get_writing_style_context",
+        description=(
+            "Extract writing style context from reference papers for style-consistent writing. "
+            "Returns style metrics and example paragraphs for prompting."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "arxiv_ids": {"type": "array", "items": {"type": "string"}, "description": "List of arXiv IDs to analyze"},
+            },
+            "required": ["arxiv_ids"],
+        },
+    ),
+    Tool(
+        name="get_paper_context_for_writing",
+        description=(
+            "Get comprehensive context for paper writing including style and structure. "
+            "Call before writing each section."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "paper_ids": {"type": "array", "items": {"type": "string"}, "description": "List of paper IDs"},
+            },
+            "required": ["paper_ids"],
+        },
+    ),
+    
+    # === HF TRENDING WITH METRICS ===
+    Tool(
+        name="fetch_hf_trending_with_metrics",
+        description=(
+            "Fetch trending papers from HuggingFace with paper metrics (word count, figures). "
+            "Specifically designed for setting target metrics for paper writing."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Topic to filter papers by"},
+                "max_results": {"type": "integer", "default": 10},
+            },
+        },
+    ),
 ]
 
 
 server = Server("research-mcp")
 
 
+# Create a mapping from tool names to Tool objects for filtering
+TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
+
+# Core tools always available regardless of persona
+CORE_TOOLS = [
+    "get_next_action",
+    "get_workflow_status",
+    "get_workflow_checklist",
+    "switch_persona",
+    "confirm_persona_switch",
+    "get_active_persona",
+    "create_project",
+    "list_projects",
+    "get_current_project",
+    "set_current_project",
+    "create_workflow",
+    "approve_idea",
+]
+
+
+async def get_current_workflow_stage() -> str:
+    """Get the current workflow stage for persona filtering."""
+    current_project_obj = await project_manager.get_current_project()
+    if not current_project_obj:
+        return "context_gathering"
+    
+    workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
+    if not workflow:
+        return "context_gathering"
+    
+    return workflow.stage
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
-    return TOOLS
+    """
+    Return tools filtered by the active persona.
+    
+    This reduces tool overload by only showing relevant tools for the current
+    workflow stage. Core tools (workflow management, persona switching) are
+    always available.
+    """
+    workflow_stage = await get_current_workflow_stage()
+    active_persona = persona_manager.get_active_persona(workflow_stage)
+    
+    allowed_tool_names = set(active_persona.tools) | set(CORE_TOOLS)
+    
+    filtered_tools = [
+        tool for tool in TOOLS 
+        if tool.name in allowed_tool_names
+    ]
+    
+    return filtered_tools
+
+
+ALWAYS_ALLOWED_TOOLS = {
+    "get_next_action",
+    "switch_persona",
+    "confirm_persona_switch",
+    "get_active_persona",
+    "create_project",
+    "list_projects",
+    "get_current_project",
+    "set_current_project",
+    "create_workflow",
+    "get_workflow_status",
+    "get_workflow_checklist",
+    "approve_idea",  # User action
+}
+
+
+async def _check_persona_access(tool_name: str) -> tuple[bool, str]:
+    """Check if the current persona can access this tool.
+    
+    Returns (is_allowed, error_message)
+    """
+    if tool_name in ALWAYS_ALLOWED_TOOLS:
+        return True, ""
+    
+    current_project_obj = await project_manager.get_current_project()
+    if not current_project_obj:
+        return True, ""
+    
+    workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
+    if not workflow:
+        return True, ""
+    
+    if workflow.pending_persona_switch:
+        return False, json.dumps({
+            "error": "PERSONA_SWITCH_PENDING",
+            "message": (
+                f"A persona switch to '{workflow.pending_persona_switch}' is pending confirmation. "
+                "Wait for user to confirm before calling any tools."
+            ),
+            "current_persona": workflow.current_persona,
+            "pending_switch": workflow.pending_persona_switch,
+            "action_required": (
+                f"User must type: SWITCH {workflow.pending_persona_switch} CODE <confirmation_code>"
+            ),
+        }, indent=2)
+    
+    current_persona = workflow.current_persona
+    
+    try:
+        persona_type = PersonaType(current_persona)
+        persona_info = PERSONAS.get(persona_type)
+        
+        if persona_info and tool_name not in persona_info.tools:
+            return False, json.dumps({
+                "error": "TOOL_NOT_AVAILABLE",
+                "message": (
+                    f"Tool '{tool_name}' is not available in '{current_persona}' persona. "
+                    "You need to switch persona to access this tool."
+                ),
+                "current_persona": current_persona,
+                "current_tools": persona_info.tools[:10],
+                "action_required": f"Call switch_persona() to change persona",
+            }, indent=2)
+    except ValueError:
+        pass
+    
+    return True, ""
 
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if name not in TOOL_HANDLERS:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
+    
+    is_allowed, error_msg = await _check_persona_access(name)
+    if not is_allowed:
+        return [TextContent(type="text", text=error_msg)]
 
     try:
         handler = TOOL_HANDLERS[name]
         result = await handler(**arguments)
         
-        # Handle case where result might be a dict (from extract_paper_context)
-        import json
         if isinstance(result, dict):
             result = json.dumps(result, indent=2, ensure_ascii=False)
         

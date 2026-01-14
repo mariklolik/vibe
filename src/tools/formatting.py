@@ -434,7 +434,9 @@ async def cast_to_format(
 ) -> str:
     """Convert paper content to conference-specific LaTeX format.
     
-    Prerequisites: Should have figures generated and paper content written.
+    Prerequisites: 
+    - Should have figures generated and paper content written
+    - All claims must be verified through verify_and_record_hypothesis
     """
     # Check workflow prerequisites
     is_valid, error_msg, missing = await _check_formatting_prerequisites("cast_to_format")
@@ -449,6 +451,51 @@ async def cast_to_format(
                 "Call get_next_action() to see required steps."
             ),
         }, indent=2)
+    
+    # Check that claims are verified
+    current_project_obj = await project_manager.get_current_project()
+    if current_project_obj:
+        workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
+        if workflow:
+            verified_hypotheses = getattr(workflow, "verified_hypotheses", {})
+            
+            # Check if there are any completed experiments without verification
+            if len(workflow.completed_experiments) > 0 and len(verified_hypotheses) == 0:
+                return json.dumps({
+                    "success": False,
+                    "error": "UNVERIFIED_CLAIMS",
+                    "message": (
+                        "BLOCKED: You have completed experiments but no verified hypotheses. "
+                        "All claims in the paper MUST be verified using verify_and_record_hypothesis() "
+                        "with real experiment run_ids before formatting."
+                    ),
+                    "completed_experiments": workflow.completed_experiments,
+                    "verified_hypotheses": 0,
+                    "action_required": (
+                        "Call verify_and_record_hypothesis(hypothesis_id, statement, run_ids, metric) "
+                        "for each claim you want to make in the paper."
+                    ),
+                }, indent=2)
+            
+            # Check that verified hypotheses used real logs
+            unverified_from_logs = []
+            for hypo_id, record in verified_hypotheses.items():
+                if not record.get("verified_from_logs", False):
+                    unverified_from_logs.append({
+                        "hypothesis_id": hypo_id,
+                        "reason": "Was not verified from actual experiment logs",
+                    })
+            
+            if unverified_from_logs:
+                return json.dumps({
+                    "success": False,
+                    "error": "CLAIMS_NOT_FROM_LOGS",
+                    "message": (
+                        "BLOCKED: Some verified claims were not derived from actual experiment logs. "
+                        "Re-verify using verify_and_record_hypothesis() with valid run_ids."
+                    ),
+                    "invalid_claims": unverified_from_logs,
+                }, indent=2)
     
     conf_lower = conference.lower()
     style = get_conference_style(conf_lower)

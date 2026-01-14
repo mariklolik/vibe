@@ -9,6 +9,24 @@ from src.db.experiments_db import experiments_db
 from src.project.manager import project_manager
 
 
+STAGE_PERSONA_MAP = {
+    "context_gathering": "researcher",
+    "idea_generation": "researcher",
+    "idea_approval": "researcher",
+    "experiment_setup": "experimenter",
+    "experimenting": "experimenter",
+    "analysis": "experimenter",
+    "writing": "writer",
+    "formatting": "writer",
+    "complete": "writer",
+}
+
+
+def _get_required_persona_for_stage(stage: str) -> Optional[str]:
+    """Get the required persona for a workflow stage."""
+    return STAGE_PERSONA_MAP.get(stage)
+
+
 # Minimum thresholds for paper completeness
 MIN_WORD_COUNT_RATIO = 0.85  # Paper must be 85% of target length
 MIN_FIGURE_COUNT = 3
@@ -132,6 +150,85 @@ async def get_next_action() -> str:
     
     current_stage = workflow.stage
     stage_info = WORKFLOW_STAGES.get(current_stage, {})
+    
+    # HARD BLOCK: If there's a pending persona switch awaiting confirmation
+    if workflow.pending_persona_switch:
+        return json.dumps({
+            "status": "PERSONA_SWITCH_PENDING",
+            "message": (
+                "STOP. A persona switch is pending user confirmation. "
+                "Wait for the user to confirm before proceeding."
+            ),
+            "current_persona": workflow.current_persona,
+            "pending_switch_to": workflow.pending_persona_switch,
+            "user_action_required": (
+                f"User must type: SWITCH {workflow.pending_persona_switch} CODE <confirmation_code>\n"
+                "The confirmation code was shown to the user in the switch_persona response."
+            ),
+            "ai_instruction": (
+                "STOP. Do NOT proceed with any other actions. "
+                "Wait for the user to confirm the persona switch."
+            ),
+            "do_not_proceed": True,
+        }, indent=2)
+    
+    # HARD BLOCK: Check if stage requires a different persona and force switch
+    required_persona = _get_required_persona_for_stage(current_stage)
+    if required_persona and workflow.current_persona != required_persona:
+        return json.dumps({
+            "status": "PERSONA_SWITCH_REQUIRED",
+            "message": (
+                f"STOP. Stage '{current_stage}' requires '{required_persona}' persona. "
+                f"Current persona is '{workflow.current_persona}'."
+            ),
+            "current_persona": workflow.current_persona,
+            "required_persona": required_persona,
+            "action_required": f"Call switch_persona('{required_persona}') and wait for user confirmation",
+            "ai_instruction": (
+                f"1. Call switch_persona('{required_persona}')\n"
+                "2. Present the confirmation command to the user\n"
+                "3. WAIT for the user to confirm the switch\n"
+                "4. Do NOT proceed until persona is switched"
+            ),
+            "do_not_proceed": True,
+        }, indent=2)
+    
+    # HARD BLOCK: Before ANY planning or experiments, require idea approval
+    # This prevents the model from creating a plan that includes idea approval as step 1
+    if current_stage in ["idea_generation", "idea_approval"]:
+        if not workflow.approved_idea_id:
+            ideas_info = []
+            ideas = await experiments_db.list_ideas(status="pending_approval")
+            for idea in ideas:
+                ideas_info.append({
+                    "idea_id": idea.idea_id,
+                    "title": idea.title,
+                    "novelty_score": getattr(idea, "novelty_score", 0),
+                })
+            
+            return json.dumps({
+                "status": "HARD_BLOCK",
+                "stage": current_stage,
+                "message": (
+                    "STOP. Do NOT create a plan or proceed with any experiments yet. "
+                    "An idea MUST be approved by the user BEFORE any planning."
+                ),
+                "reason": "User approval required before planning phase",
+                "pending_ideas": ideas_info,
+                "user_action_required": (
+                    "User must type: APPROVE <idea_id> CODE <confirmation_code>\n"
+                    "The confirmation code is shown only to the human user."
+                ),
+                "ai_instruction": (
+                    "1. If no ideas exist, call generate_ideas() and submit_idea() first.\n"
+                    "2. Present the ideas to the user with their approval commands.\n"
+                    "3. WAIT for the user to approve one idea.\n"
+                    "4. Do NOT write a plan until an idea is approved.\n"
+                    "5. Do NOT call any experiment or analysis tools."
+                ),
+                "do_not_proceed": True,
+                "do_not_create_plan": True,
+            }, indent=2)
     
     # Check if current stage is blocking (requires user action)
     if stage_info.get("is_blocking"):
@@ -479,5 +576,152 @@ async def set_target_metrics_from_papers(arxiv_ids: list[str]) -> str:
         "message": (
             f"Target metrics set: {metrics.word_count} words, "
             f"{metrics.figure_count} figures, {metrics.table_count} tables"
+        ),
+    }, indent=2)
+
+
+async def check_and_expand_paper() -> str:
+    """
+    Main expansion loop - checks paper completeness and triggers expansion if needed.
+    
+    This should be called after each writing pass. If the paper is too short,
+    it generates new hypotheses and queues background experiments.
+    
+    Returns:
+        JSON with expansion status and queued experiments
+    """
+    current_project_obj = await project_manager.get_current_project()
+    if not current_project_obj:
+        return json.dumps({"error": "No active project"})
+    
+    workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
+    if not workflow:
+        return json.dumps({"error": "No workflow found"})
+    
+    completeness = await _check_paper_completeness_internal(workflow)
+    
+    if completeness.get("sufficient", False):
+        return json.dumps({
+            "status": "COMPLETE",
+            "message": "Paper meets target metrics. Ready for formatting.",
+            "completeness": completeness,
+            "next_action": {
+                "tool": "cast_to_format",
+                "description": "Convert paper to conference LaTeX format",
+            },
+        }, indent=2)
+    
+    workflow.paper_iterations += 1
+    await workflow_db.save_workflow(workflow)
+    
+    expansion_suggestions = _generate_expansion_suggestions(workflow, completeness)
+    
+    return json.dumps({
+        "status": "NEEDS_EXPANSION",
+        "iteration": workflow.paper_iterations,
+        "completeness": completeness,
+        "expansion_suggestions": expansion_suggestions,
+        "ai_instruction": (
+            "Paper is too short. You must:\n"
+            "1. Generate additional hypotheses for unexplored aspects\n"
+            "2. Run experiments to test these hypotheses (use git worktrees for parallel runs)\n"
+            "3. Verify results with verify_hypothesis before adding claims\n"
+            "4. Add verified results to paper with figures and analysis\n"
+            "5. Call check_and_expand_paper() again to verify completeness"
+        ),
+        "required_actions": [
+            "define_hypotheses - Generate new testable hypotheses",
+            "run_experiment - Execute experiments in background",
+            "verify_hypothesis - Statistically verify results",
+            "plot_comparison_bar - Generate figures for new results",
+            "write_paper_section - Add content to paper",
+        ],
+    }, indent=2)
+
+
+def _generate_expansion_suggestions(workflow: WorkflowState, completeness: dict) -> list[dict]:
+    """Generate suggestions for expanding a short paper."""
+    suggestions = []
+    
+    word_gap = completeness.get("target_words", 5000) - completeness.get("current_words", 0)
+    figure_gap = completeness.get("target_figures", 6) - completeness.get("current_figures", 0)
+    
+    if word_gap > 1000:
+        suggestions.append({
+            "type": "ablation_study",
+            "description": "Add ablation study section analyzing component contributions",
+            "estimated_words": 500,
+            "estimated_figures": 1,
+        })
+    
+    if word_gap > 500:
+        suggestions.append({
+            "type": "analysis",
+            "description": "Add qualitative analysis with examples and visualizations",
+            "estimated_words": 400,
+            "estimated_figures": 2,
+        })
+    
+    if figure_gap > 2:
+        suggestions.append({
+            "type": "sensitivity",
+            "description": "Add hyperparameter sensitivity analysis with plots",
+            "estimated_words": 300,
+            "estimated_figures": 2,
+        })
+    
+    if len(workflow.completed_experiments) < 5:
+        suggestions.append({
+            "type": "additional_baselines",
+            "description": "Compare against additional baseline methods",
+            "estimated_words": 300,
+            "estimated_figures": 1,
+        })
+    
+    if word_gap > 800:
+        suggestions.append({
+            "type": "failure_analysis",
+            "description": "Add failure case analysis section",
+            "estimated_words": 400,
+            "estimated_figures": 1,
+        })
+    
+    return suggestions
+
+
+async def get_verified_claims() -> str:
+    """
+    Get all verified claims that can be included in the paper.
+    
+    Only claims that have passed hypothesis verification can be cited.
+    """
+    current_project_obj = await project_manager.get_current_project()
+    if not current_project_obj:
+        return json.dumps({"error": "No active project"})
+    
+    workflow = await workflow_db.get_project_workflow(current_project_obj.project_id)
+    if not workflow:
+        return json.dumps({"error": "No workflow found"})
+    
+    verified = getattr(workflow, "verified_hypotheses", {})
+    
+    claims = []
+    for hypo_id, result in verified.items():
+        if result.get("can_claim", False):
+            claims.append({
+                "hypothesis_id": hypo_id,
+                "claim": result.get("statement", ""),
+                "p_value": result.get("p_value"),
+                "effect_size": result.get("effect_size"),
+                "experiment_id": result.get("experiment_id"),
+                "verified_at": result.get("timestamp"),
+            })
+    
+    return json.dumps({
+        "verified_claims": claims,
+        "count": len(claims),
+        "message": (
+            "Only these verified claims can be made in the paper. "
+            "Unverified results must go through verify_hypothesis first."
         ),
     }, indent=2)

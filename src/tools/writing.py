@@ -6,15 +6,254 @@ These tools help with:
 - Formatting LaTeX tables from data
 - Adding citations from cached papers
 - Structuring sections
+- Reading gathered context for writing style
 """
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from src.db.papers_cache import papers_cache
 from src.db.experiments_db import experiments_db
+from src.db.workflow import workflow_db
+from src.project.manager import project_manager
+
+
+async def get_project_writing_context() -> str:
+    """Get all papers gathered for the current project from the context folder.
+    
+    This reads the project/context/ folder where papers were saved during
+    the research phase. Use this to inform your writing with the actual
+    papers you gathered.
+    
+    Returns:
+        JSON with all gathered papers including full abstracts
+    """
+    current_project = await project_manager.get_current_project()
+    if not current_project:
+        return json.dumps({
+            "error": "No active project",
+            "action_required": "Set current project first",
+        })
+    
+    context_dir = current_project.context_dir
+    if not context_dir.exists():
+        return json.dumps({
+            "error": "No context folder found",
+            "message": "No papers have been gathered yet. Use fetch_arxiv_trending or search_papers first.",
+        })
+    
+    papers = []
+    for context_file in context_dir.glob("*.json"):
+        try:
+            paper_data = json.loads(context_file.read_text())
+            papers.append(paper_data)
+        except Exception:
+            continue
+    
+    if not papers:
+        return json.dumps({
+            "count": 0,
+            "message": "No papers found in context folder. Gather papers first.",
+        })
+    
+    workflow = await workflow_db.get_project_workflow(current_project.project_id)
+    target_metrics = workflow.target_metrics if workflow else None
+    
+    return json.dumps({
+        "project": current_project.project_id,
+        "context_folder": str(context_dir),
+        "count": len(papers),
+        "target_metrics": target_metrics,
+        "papers": papers,
+        "usage": (
+            "Use these papers to inform your writing. "
+            "Reference their style, structure, and terminology."
+        ),
+    }, indent=2, ensure_ascii=False)
+
+
+async def extract_style_from_context() -> str:
+    """Analyze gathered papers to extract writing style patterns.
+    
+    This function reads all papers from the project context folder and
+    analyzes their abstracts to determine:
+    - Average sentence length
+    - Use of first person ("we") vs passive voice
+    - Technical vocabulary patterns
+    - Formality level
+    
+    Use this to match the style of papers in your research area.
+    
+    Returns:
+        JSON with style analysis and recommendations
+    """
+    current_project = await project_manager.get_current_project()
+    if not current_project:
+        return json.dumps({"error": "No active project"})
+    
+    context_dir = current_project.context_dir
+    if not context_dir.exists():
+        return json.dumps({
+            "error": "No context folder found",
+            "message": "Gather papers first to analyze their style",
+        })
+    
+    all_abstracts = []
+    paper_titles = []
+    
+    for context_file in context_dir.glob("*.json"):
+        try:
+            paper_data = json.loads(context_file.read_text())
+            abstract = paper_data.get("abstract", "")
+            if abstract:
+                all_abstracts.append(abstract)
+                paper_titles.append(paper_data.get("title", "Unknown"))
+        except Exception:
+            continue
+    
+    if not all_abstracts:
+        return json.dumps({
+            "error": "No abstracts found in gathered papers",
+            "message": "Gather papers with abstracts first",
+        })
+    
+    combined_text = " ".join(all_abstracts)
+    
+    sentences = re.split(r'[.!?]+', combined_text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    
+    if sentences:
+        sentence_lengths = [len(s.split()) for s in sentences]
+        avg_sentence_length = sum(sentence_lengths) / len(sentence_lengths)
+    else:
+        avg_sentence_length = 20
+    
+    words = combined_text.lower().split()
+    we_count = sum(1 for w in words if w in ["we", "our", "us"])
+    passive_indicators = sum(1 for w in words if w in ["is", "are", "was", "were", "been", "being"])
+    total_words = len(words)
+    
+    first_person_ratio = we_count / max(total_words, 1)
+    uses_first_person = first_person_ratio > 0.005
+    
+    technical_patterns = [
+        r'\b(proposed|novel|state-of-the-art|sota|baseline)\b',
+        r'\b(outperform|achieve|demonstrate|show)\b',
+        r'\b(respectively|specifically|particularly)\b',
+        r'\b(furthermore|moreover|however|therefore)\b',
+    ]
+    
+    formality_score = 0
+    for pattern in technical_patterns:
+        matches = len(re.findall(pattern, combined_text, re.IGNORECASE))
+        if matches > 2:
+            formality_score += 0.25
+    formality_score = min(1.0, formality_score)
+    
+    common_phrases = []
+    phrase_patterns = [
+        (r'\bstate-of-the-art\b', "state-of-the-art"),
+        (r'\bwe propose\b', "we propose"),
+        (r'\bwe demonstrate\b', "we demonstrate"),
+        (r'\bexperimental results show\b', "experimental results show"),
+        (r'\bour method\b', "our method"),
+        (r'\bour approach\b', "our approach"),
+    ]
+    for pattern, phrase in phrase_patterns:
+        if re.search(pattern, combined_text, re.IGNORECASE):
+            common_phrases.append(phrase)
+    
+    style_guide = {
+        "sentence_length": {
+            "average": round(avg_sentence_length, 1),
+            "recommendation": (
+                "Use sentences of similar length (~{} words) to match the style of gathered papers."
+                .format(int(avg_sentence_length))
+            ),
+        },
+        "voice": {
+            "uses_first_person": uses_first_person,
+            "first_person_ratio": round(first_person_ratio * 100, 2),
+            "recommendation": (
+                'Use "we" and first person for clarity.'
+                if uses_first_person
+                else 'Prefer passive voice and third person for formality.'
+            ),
+        },
+        "formality": {
+            "score": round(formality_score, 2),
+            "level": "high" if formality_score > 0.7 else "medium" if formality_score > 0.4 else "low",
+            "recommendation": "Match the formal academic style of gathered papers.",
+        },
+        "common_phrases": common_phrases,
+        "papers_analyzed": len(all_abstracts),
+        "sample_titles": paper_titles[:5],
+    }
+    
+    return json.dumps({
+        "style_analysis": style_guide,
+        "writing_recommendations": [
+            f"Target sentence length: ~{int(avg_sentence_length)} words",
+            f"Use first person ('we'): {'Yes' if uses_first_person else 'Sparingly'}",
+            f"Formality level: {style_guide['formality']['level']}",
+            "Use phrases common in your field: " + ", ".join(common_phrases[:4]) if common_phrases else "Use standard academic phrases",
+        ],
+    }, indent=2)
+
+
+async def get_verified_claims_for_writing() -> str:
+    """Get only the verified claims that can be included in the paper.
+    
+    This returns claims that have been verified through verify_and_record_hypothesis()
+    with real experiment data. Use only these claims in your paper.
+    
+    Returns:
+        JSON with verified claims and their supporting data
+    """
+    current_project = await project_manager.get_current_project()
+    if not current_project:
+        return json.dumps({"error": "No active project"})
+    
+    workflow = await workflow_db.get_project_workflow(current_project.project_id)
+    if not workflow:
+        return json.dumps({"error": "No workflow found"})
+    
+    verified = getattr(workflow, "verified_hypotheses", {})
+    
+    claims = []
+    for hypo_id, record in verified.items():
+        if record.get("can_claim", False) and record.get("verified_from_logs", False):
+            claims.append({
+                "hypothesis_id": hypo_id,
+                "statement": record.get("statement", ""),
+                "metric": record.get("metric", ""),
+                "p_value": record.get("p_value"),
+                "effect_size": record.get("effect_size"),
+                "effect_interpretation": record.get("effect_interpretation"),
+                "group1_mean": record.get("group1_mean"),
+                "group2_mean": record.get("group2_mean"),
+                "run_ids": record.get("run_ids", []),
+                "verified_at": record.get("timestamp"),
+            })
+    
+    if not claims:
+        return json.dumps({
+            "count": 0,
+            "message": (
+                "No verified claims available for writing. "
+                "Run experiments and verify hypotheses using verify_and_record_hypothesis() first."
+            ),
+            "action_required": "verify_and_record_hypothesis(hypothesis_id, statement, run_ids, metric)",
+        })
+    
+    return json.dumps({
+        "count": len(claims),
+        "verified_claims": claims,
+        "message": "Only include these verified claims in your paper.",
+    }, indent=2)
 
 
 async def estimate_paper_structure(

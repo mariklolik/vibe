@@ -2,12 +2,21 @@
 
 import json
 import asyncio
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any
 
 import aiosqlite
+
+
+def _compute_log_signature(log_path: Path) -> str:
+    """Compute SHA256 hash of log file to prove real execution."""
+    if not log_path.exists():
+        return ""
+    content = log_path.read_bytes()
+    return hashlib.sha256(content).hexdigest()[:16]
 
 
 @dataclass
@@ -22,6 +31,10 @@ class ExperimentRun:
     completed_at: Optional[str] = None
     artifacts: list[str] = field(default_factory=list)
     notes: str = ""
+    experiment_signature: str = ""  # Hash of stdout log proving real execution
+    log_file_path: str = ""  # Path to stdout.log
+    is_verified: bool = False  # Whether metrics came from actual logs
+    parsed_metrics: dict = field(default_factory=dict)  # Metrics parsed from logs
     
     def to_dict(self) -> dict:
         return {
@@ -34,6 +47,10 @@ class ExperimentRun:
             "completed_at": self.completed_at,
             "artifacts": self.artifacts,
             "notes": self.notes,
+            "experiment_signature": self.experiment_signature,
+            "log_file_path": self.log_file_path,
+            "is_verified": self.is_verified,
+            "parsed_metrics": self.parsed_metrics,
         }
     
     @classmethod
@@ -48,6 +65,10 @@ class ExperimentRun:
             completed_at=data.get("completed_at"),
             artifacts=data.get("artifacts", []),
             notes=data.get("notes", ""),
+            experiment_signature=data.get("experiment_signature", ""),
+            log_file_path=data.get("log_file_path", ""),
+            is_verified=data.get("is_verified", False),
+            parsed_metrics=data.get("parsed_metrics", {}),
         )
 
 
@@ -77,7 +98,11 @@ class ExperimentTracker:
                     started_at TEXT NOT NULL,
                     completed_at TEXT,
                     artifacts TEXT,
-                    notes TEXT
+                    notes TEXT,
+                    experiment_signature TEXT DEFAULT '',
+                    log_file_path TEXT DEFAULT '',
+                    is_verified INTEGER DEFAULT 0,
+                    parsed_metrics TEXT DEFAULT '{}'
                 )
             """)
             await db.execute("""
@@ -110,6 +135,11 @@ class ExperimentTracker:
         
         now = datetime.now().isoformat()
         
+        run_log_dir = self.log_dir / run_id
+        run_log_dir.mkdir(parents=True, exist_ok=True)
+        
+        log_file_path = str(run_log_dir / "stdout.log")
+        
         run = ExperimentRun(
             run_id=run_id,
             name=name,
@@ -117,12 +147,10 @@ class ExperimentTracker:
             metrics={},
             status="running",
             started_at=now,
+            log_file_path=log_file_path,
         )
         
         await self._save_run(run)
-        
-        run_log_dir = self.log_dir / run_id
-        run_log_dir.mkdir(parents=True, exist_ok=True)
         
         config_path = run_log_dir / "config.json"
         config_path.write_text(json.dumps(config, indent=2))
@@ -174,13 +202,62 @@ class ExperimentTracker:
         if final_metrics:
             run.metrics.update(final_metrics)
         
+        # Compute signature from log file to prove real execution
+        run_log_dir = self.log_dir / run_id
+        stdout_log = run_log_dir / "stdout.log"
+        
+        if stdout_log.exists():
+            run.experiment_signature = _compute_log_signature(stdout_log)
+            run.log_file_path = str(stdout_log)
+            # Parse metrics from actual log file
+            run.parsed_metrics = self._parse_metrics_from_log(stdout_log)
+            run.is_verified = len(run.experiment_signature) > 0
+        
         await self._save_run(run)
         
-        run_log_dir = self.log_dir / run_id
         results_path = run_log_dir / "results.json"
         results_path.write_text(json.dumps(run.to_dict(), indent=2))
         
         return run
+    
+    def _parse_metrics_from_log(self, log_path: Path) -> dict:
+        """Parse metrics from stdout log file."""
+        import re
+        
+        if not log_path.exists():
+            return {}
+        
+        content = log_path.read_text()
+        
+        patterns = {
+            "loss": r"(?:loss|Loss)[:=]\s*([\d.]+)",
+            "accuracy": r"(?:accuracy|Accuracy|acc|Acc)[:=]\s*([\d.]+)",
+            "f1": r"(?:f1|F1)[:=]\s*([\d.]+)",
+            "precision": r"(?:precision|Precision)[:=]\s*([\d.]+)",
+            "recall": r"(?:recall|Recall)[:=]\s*([\d.]+)",
+            "val_loss": r"(?:val_loss|val loss)[:=]\s*([\d.]+)",
+            "val_accuracy": r"(?:val_accuracy|val_acc|val accuracy)[:=]\s*([\d.]+)",
+            "test_accuracy": r"(?:test_accuracy|test accuracy|test_acc)[:=]\s*([\d.]+)",
+            "rmse": r"(?:rmse|RMSE)[:=]\s*([\d.]+)",
+            "mae": r"(?:mae|MAE)[:=]\s*([\d.]+)",
+            "auc": r"(?:auc|AUC)[:=]\s*([\d.]+)",
+            "bleu": r"(?:bleu|BLEU)[:=]\s*([\d.]+)",
+            "perplexity": r"(?:perplexity|ppl|PPL)[:=]\s*([\d.]+)",
+        }
+        
+        result = {}
+        for name, pattern in patterns.items():
+            matches = re.findall(pattern, content, re.IGNORECASE)
+            if matches:
+                values = [float(m) for m in matches]
+                result[name] = {
+                    "final": values[-1],
+                    "min": min(values),
+                    "max": max(values),
+                    "count": len(values),
+                }
+        
+        return result
     
     async def log_artifact(
         self,
@@ -199,8 +276,9 @@ class ExperimentTracker:
         async with aiosqlite.connect(str(self.metrics_db)) as db:
             await db.execute("""
                 INSERT OR REPLACE INTO runs 
-                (run_id, name, config, metrics, status, started_at, completed_at, artifacts, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (run_id, name, config, metrics, status, started_at, completed_at, artifacts, notes,
+                 experiment_signature, log_file_path, is_verified, parsed_metrics)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 run.run_id,
                 run.name,
@@ -211,6 +289,10 @@ class ExperimentTracker:
                 run.completed_at,
                 json.dumps(run.artifacts),
                 run.notes,
+                run.experiment_signature,
+                run.log_file_path,
+                1 if run.is_verified else 0,
+                json.dumps(run.parsed_metrics),
             ))
             await db.commit()
     
@@ -234,6 +316,10 @@ class ExperimentTracker:
                         completed_at=row[6],
                         artifacts=json.loads(row[7]) if row[7] else [],
                         notes=row[8] or "",
+                        experiment_signature=row[9] if len(row) > 9 else "",
+                        log_file_path=row[10] if len(row) > 10 else "",
+                        is_verified=bool(row[11]) if len(row) > 11 else False,
+                        parsed_metrics=json.loads(row[12]) if len(row) > 12 and row[12] else {},
                     )
         return None
     
@@ -257,6 +343,10 @@ class ExperimentTracker:
                         completed_at=row[6],
                         artifacts=json.loads(row[7]) if row[7] else [],
                         notes=row[8] or "",
+                        experiment_signature=row[9] if len(row) > 9 else "",
+                        log_file_path=row[10] if len(row) > 10 else "",
+                        is_verified=bool(row[11]) if len(row) > 11 else False,
+                        parsed_metrics=json.loads(row[12]) if len(row) > 12 and row[12] else {},
                     ))
         return runs
     
@@ -328,32 +418,120 @@ class ExperimentTracker:
 
 async def log_experiment(
     project_dir: str,
-    name: str,
-    config: dict,
-    metrics: dict,
+    run_id: str,
+    additional_notes: str = "",
 ) -> str:
-    """Log a completed experiment.
+    """Log and finalize a completed experiment.
+    
+    IMPORTANT: This function REQUIRES a valid run_id from run_experiment().
+    You cannot log arbitrary metrics - they must come from real experiment logs.
     
     Args:
         project_dir: Path to the project directory
-        name: Experiment name
-        config: Configuration dictionary
-        metrics: Results metrics dictionary
+        run_id: The run_id returned by run_experiment() - REQUIRED
+        additional_notes: Optional notes about the experiment
     
     Returns:
-        JSON string with run details
+        JSON string with run details including parsed metrics from logs
     """
     tracker = ExperimentTracker(Path(project_dir))
     
-    run = await tracker.start_run(name, config)
-    run = await tracker.complete_run(run.run_id, final_metrics=metrics)
+    # Validate run exists
+    run = await tracker.get_run(run_id)
+    if not run:
+        return json.dumps({
+            "success": False,
+            "error": "INVALID_RUN_ID",
+            "message": (
+                f"Run '{run_id}' not found. You must use a run_id from run_experiment(). "
+                "Cannot log arbitrary metrics without a real experiment run."
+            ),
+        }, indent=2)
+    
+    # Check if already completed
+    if run.status == "completed" and run.is_verified:
+        return json.dumps({
+            "success": True,
+            "message": "Experiment already logged and verified",
+            "run_id": run.run_id,
+            "name": run.name,
+            "metrics": run.parsed_metrics,
+            "is_verified": run.is_verified,
+            "experiment_signature": run.experiment_signature,
+        }, indent=2)
+    
+    # Complete the run and parse metrics from actual logs
+    run = await tracker.complete_run(run_id, notes=additional_notes)
+    
+    if not run.is_verified:
+        return json.dumps({
+            "success": False,
+            "error": "NO_LOG_FILE",
+            "message": (
+                f"No log file found for run '{run_id}'. "
+                "The experiment may not have generated output or may still be running. "
+                "Check the log directory: " + str(tracker.log_dir / run_id)
+            ),
+        }, indent=2)
     
     return json.dumps({
         "success": True,
         "run_id": run.run_id,
         "name": run.name,
-        "metrics": run.metrics,
-        "log_path": str(tracker.log_dir / run.run_id),
+        "metrics": run.parsed_metrics,
+        "is_verified": run.is_verified,
+        "experiment_signature": run.experiment_signature,
+        "log_path": str(tracker.log_dir / run_id),
+        "message": "Metrics parsed from actual experiment logs",
+    }, indent=2)
+
+
+async def get_real_metrics(project_dir: str, run_id: str) -> str:
+    """Get only the metrics parsed from actual log files.
+    
+    This function returns ONLY metrics that were extracted from real
+    experiment stdout logs. It will NOT return user-provided metrics.
+    
+    Args:
+        project_dir: Path to the project directory
+        run_id: The run_id from run_experiment()
+    
+    Returns:
+        JSON with parsed metrics or error if run not verified
+    """
+    tracker = ExperimentTracker(Path(project_dir))
+    
+    run = await tracker.get_run(run_id)
+    if not run:
+        return json.dumps({
+            "success": False,
+            "error": "Run not found",
+            "run_id": run_id,
+        })
+    
+    if not run.is_verified:
+        return json.dumps({
+            "success": False,
+            "error": "RUN_NOT_VERIFIED",
+            "message": (
+                "This run has no verified metrics. Either:\n"
+                "1. The experiment has not completed\n"
+                "2. No log file was generated\n"
+                "3. The log file could not be parsed\n"
+                "Use log_experiment(run_id) to finalize and verify the run."
+            ),
+            "run_id": run_id,
+            "status": run.status,
+        })
+    
+    return json.dumps({
+        "success": True,
+        "run_id": run_id,
+        "name": run.name,
+        "is_verified": True,
+        "experiment_signature": run.experiment_signature,
+        "parsed_metrics": run.parsed_metrics,
+        "log_file": run.log_file_path,
     }, indent=2)
 
 

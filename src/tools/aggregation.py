@@ -12,6 +12,47 @@ from src.apis.arxiv import arxiv_client, ArxivPaper
 from src.apis.huggingface import hf_client, HFPaper
 from src.apis.semantic_scholar import s2_client
 from src.db.papers_cache import papers_cache, CachedPaper
+from src.db.workflow import workflow_db
+from src.project.manager import project_manager
+
+
+async def _require_active_project() -> tuple[bool, str, any]:
+    """Check that an active project exists before paper fetching.
+    
+    Returns:
+        (is_valid, error_message, project)
+    """
+    current_project = await project_manager.get_current_project()
+    if not current_project:
+        error_json = json.dumps({
+            "success": False,
+            "error": "NO_ACTIVE_PROJECT",
+            "message": (
+                "BLOCKED: You must create a project before gathering papers. "
+                "Papers need to be saved to the project context folder for later use."
+            ),
+            "action_required": "Call create_project(name='your_research_topic') first",
+        }, indent=2)
+        return False, error_json, None
+    
+    return True, "", current_project
+
+
+async def _save_paper_to_project_context(project, paper_data: dict, paper_id: str) -> None:
+    """Save a paper's data to the project context folder."""
+    context_dir = project.context_dir
+    context_dir.mkdir(parents=True, exist_ok=True)
+    
+    safe_id = paper_id.replace(":", "_").replace("/", "_")
+    context_file = context_dir / f"{safe_id}.json"
+    
+    context_file.write_text(json.dumps(paper_data, indent=2, ensure_ascii=False))
+    
+    workflow = await workflow_db.get_project_workflow(project.project_id)
+    if workflow:
+        if paper_id not in workflow.gathered_papers:
+            workflow.gathered_papers.append(paper_id)
+            await workflow_db.save_workflow(workflow)
 
 
 def compute_relevance_score(query: str, title: str, abstract: str) -> float:
@@ -42,11 +83,21 @@ async def fetch_arxiv_trending(
     days: int = 7,
     max_results: int = 20,
 ) -> str:
+    """Fetch trending papers from arXiv and save to project context.
+    
+    REQUIRES: Active project must exist. Papers are saved to project/context/ folder.
+    """
+    is_valid, error_msg, project = await _require_active_project()
+    if not is_valid:
+        return error_msg
+    
     papers = await arxiv_client.fetch_trending(category, days, max_results)
     
     for paper in papers:
+        paper_id = f"arxiv:{paper.arxiv_id}"
+        
         cached = CachedPaper(
-            paper_id=f"arxiv:{paper.arxiv_id}",
+            paper_id=paper_id,
             source="arxiv",
             title=paper.title,
             abstract=paper.abstract,
@@ -62,11 +113,27 @@ async def fetch_arxiv_trending(
             extra_data={"comment": paper.comment, "html_url": paper.html_url},
         )
         await papers_cache.cache_paper(cached)
+        
+        paper_data = {
+            "paper_id": paper_id,
+            "title": paper.title,
+            "abstract": paper.abstract,
+            "authors": paper.authors,
+            "categories": paper.categories,
+            "published": paper.published.isoformat(),
+            "arxiv_id": paper.arxiv_id,
+            "pdf_url": paper.pdf_url,
+            "source": "arxiv",
+            "gathered_at": datetime.now().isoformat(),
+        }
+        await _save_paper_to_project_context(project, paper_data, paper_id)
     
     result = {
         "count": len(papers),
         "category": category,
         "days": days,
+        "project": project.project_id,
+        "saved_to": str(project.context_dir),
         "papers": [
             {
                 "id": p.arxiv_id,
@@ -89,11 +156,25 @@ async def fetch_hf_trending(
     days: int = 7,
     max_results: int = 20,
 ) -> str:
+    """Fetch trending papers from HuggingFace and save to project context.
+    
+    REQUIRES: Active project must exist. Papers are saved to project/context/ folder.
+    """
+    is_valid, error_msg, project = await _require_active_project()
+    if not is_valid:
+        return error_msg
+    
     papers = await hf_client.fetch_trending(topic, days, max_results)
     
     for paper in papers:
+        paper_id = f"hf:{paper.paper_id}"
+        
+        extra_data = {"upvotes": paper.upvotes}
+        if paper.metrics:
+            extra_data["metrics"] = paper.metrics.to_dict()
+        
         cached = CachedPaper(
-            paper_id=f"hf:{paper.paper_id}",
+            paper_id=paper_id,
             source="huggingface",
             title=paper.title,
             abstract=paper.summary,
@@ -106,14 +187,31 @@ async def fetch_hf_trending(
             code_url=paper.github_url,
             citation_count=paper.upvotes,
             cached_at=datetime.now().isoformat(),
-            extra_data={"upvotes": paper.upvotes},
+            extra_data=extra_data,
         )
         await papers_cache.cache_paper(cached)
+        
+        paper_data = {
+            "paper_id": paper_id,
+            "title": paper.title,
+            "abstract": paper.summary,
+            "authors": paper.authors,
+            "categories": [],
+            "published": paper.published_at.isoformat(),
+            "arxiv_id": paper.arxiv_id,
+            "github_url": paper.github_url,
+            "upvotes": paper.upvotes,
+            "source": "huggingface",
+            "gathered_at": datetime.now().isoformat(),
+        }
+        await _save_paper_to_project_context(project, paper_data, paper_id)
     
     result = {
         "count": len(papers),
         "topic": topic,
         "days": days,
+        "project": project.project_id,
+        "saved_to": str(project.context_dir),
         "papers": [
             {
                 "id": p.paper_id,
@@ -124,9 +222,74 @@ async def fetch_hf_trending(
                 "upvotes": p.upvotes,
                 "arxiv_id": p.arxiv_id,
                 "github": p.github_url,
+                "metrics": p.metrics.to_dict() if p.metrics else None,
             }
             for p in papers
         ],
+    }
+    
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+async def fetch_hf_trending_with_metrics(
+    topic: Optional[str] = None,
+    max_results: int = 10,
+) -> str:
+    """
+    Fetch trending papers from HuggingFace with paper metrics (word count, figures, etc).
+    
+    This is specifically designed for setting target metrics for paper writing.
+    It extracts metrics from each paper's PDF/HTML to get realistic targets.
+    
+    Args:
+        topic: Topic to filter papers by (e.g., "attention mechanisms")
+        max_results: Maximum papers to fetch and analyze
+    
+    Returns:
+        JSON with papers and their metrics, plus average metrics
+    """
+    papers = await hf_client.fetch_trending_with_metrics(topic=topic, max_results=max_results)
+    
+    papers_with_valid_metrics = [
+        p for p in papers 
+        if p.metrics and p.metrics.word_count > 0
+    ]
+    
+    if papers_with_valid_metrics:
+        n = len(papers_with_valid_metrics)
+        avg_metrics = {
+            "word_count": sum(p.metrics.word_count for p in papers_with_valid_metrics) // n,
+            "figure_count": sum(p.metrics.figure_count for p in papers_with_valid_metrics) // n,
+            "table_count": sum(p.metrics.table_count for p in papers_with_valid_metrics) // n,
+            "page_count": sum(p.metrics.page_count for p in papers_with_valid_metrics) // n,
+        }
+    else:
+        avg_metrics = {
+            "word_count": 5000,
+            "figure_count": 6,
+            "table_count": 3,
+            "page_count": 9,
+        }
+    
+    result = {
+        "count": len(papers),
+        "topic": topic,
+        "average_metrics": avg_metrics,
+        "papers": [
+            {
+                "id": p.paper_id,
+                "title": p.title,
+                "arxiv_id": p.arxiv_id,
+                "upvotes": p.upvotes,
+                "metrics": p.metrics.to_dict() if p.metrics else None,
+            }
+            for p in papers
+        ],
+        "recommendation": (
+            f"Based on {len(papers_with_valid_metrics)} analyzed papers, "
+            f"target {avg_metrics['word_count']} words, {avg_metrics['figure_count']} figures, "
+            f"{avg_metrics['table_count']} tables for your paper."
+        ),
     }
     
     return json.dumps(result, indent=2, ensure_ascii=False)
@@ -137,14 +300,20 @@ async def search_papers(
     max_results: int = 10,
     min_relevance: float = 0.0,
 ) -> str:
-    """Search papers with relevance scoring.
+    """Search papers with relevance scoring and save to project context.
+    
+    REQUIRES: Active project must exist. Papers are saved to project/context/ folder.
     
     Args:
         query: Search query
         max_results: Maximum papers to return
         min_relevance: Minimum relevance score (0.0-1.0) to include paper
     """
-    cached_results = await papers_cache.search(query, max_results * 3)  # Fetch more for filtering
+    is_valid, error_msg, project = await _require_active_project()
+    if not is_valid:
+        return error_msg
+    
+    cached_results = await papers_cache.search(query, max_results * 3)
     
     if len(cached_results) < max_results * 2:
         try:
@@ -199,20 +368,35 @@ async def search_papers(
         except Exception:
             pass
     
-    # Score and sort by relevance
     scored_results = []
     for p in cached_results:
         score = compute_relevance_score(query, p.title, p.abstract)
         if score >= min_relevance:
             scored_results.append((score, p))
     
-    # Sort by relevance score descending
     scored_results.sort(key=lambda x: x[0], reverse=True)
+    
+    for score, p in scored_results[:max_results]:
+        paper_data = {
+            "paper_id": p.paper_id,
+            "title": p.title,
+            "abstract": p.abstract,
+            "authors": p.authors,
+            "categories": p.categories,
+            "published": p.published,
+            "source": p.source,
+            "citation_count": p.citation_count,
+            "relevance_score": score,
+            "gathered_at": datetime.now().isoformat(),
+        }
+        await _save_paper_to_project_context(project, paper_data, p.paper_id)
     
     result = {
         "query": query,
         "count": len(scored_results[:max_results]),
         "min_relevance": min_relevance,
+        "project": project.project_id,
+        "saved_to": str(project.context_dir),
         "papers": [
             {
                 "id": p.paper_id,
