@@ -378,14 +378,22 @@ class ExperimentAgent(BaseAgent):
             content = content.replace('\\"', '"')
             logger.warning(f"Fixed JSON-escaped quotes in {filepath}")
 
-        # Fix 2: If content starts mid-string (missing opening docstring)
+        # Fix 2: Strip markdown code fences that leaked into the code content
+        # The LLM sometimes wraps code in ```python...``` or ```json...``` inside
+        # the JSON "content" field, producing SyntaxErrors like `p_str =```json`
+        import re
+        # Remove opening fences: ```python, ```json, ```yaml, bare ```
+        content = re.sub(r'^```(?:python|json|yaml|yml|bash|sh)?\s*$', '', content, flags=re.MULTILINE)
+        # Remove closing fences: bare ``` at end of line
+        content = re.sub(r'^```\s*$', '', content, flags=re.MULTILINE)
+
+        # Fix 3: If content starts mid-string (missing opening docstring)
         # Detect: first line doesn't start with valid Python tokens
         first_line = content.split("\n")[0].strip() if "\n" in content else content[:100].strip()
         valid_starts = ("import ", "from ", "class ", "def ", "#", '"""', "'''",
                         "__", "if ", "try:", "import", "@", "#!/")
         if first_line and not any(first_line.startswith(s) for s in valid_starts):
             # Try to find where real code starts
-            import re
             match = re.search(r'^(from __future__|import |from |class |def |#|""")', content, re.MULTILINE)
             if match:
                 logger.warning(f"Trimming {len(content[:match.start()])} chars of preamble from {filepath}")
