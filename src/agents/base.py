@@ -56,11 +56,15 @@ class BaseAgent:
 
         This is the key pattern: every call gets fresh context
         from progress.txt, not from conversation history.
+        Progress is truncated to last 4000 chars to avoid wasting context tokens.
         """
         progress = read_progress(self.project_dir)
 
         parts = []
         if progress:
+            # Truncate to recent progress (last 4000 chars) — full log can be 50K+
+            if len(progress) > 4000:
+                progress = "...[truncated]\n" + progress[-4000:]
             parts.append(f"## Current Progress\n{progress}")
         if extra_context:
             parts.append(f"## Additional Context\n{extra_context}")
