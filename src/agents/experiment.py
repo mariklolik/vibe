@@ -171,7 +171,7 @@ class ExperimentAgent(BaseAgent):
     system_prompt = EXPERIMENT_SYSTEM_PROMPT
     default_effort = EFFORT_HIGH
     default_fallback_model = "haiku"
-    default_max_budget_usd = 0.50
+    default_max_budget_usd = None  # No budget cap — code quality is critical
 
     def __init__(
         self,
