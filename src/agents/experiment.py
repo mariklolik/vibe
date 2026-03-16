@@ -447,6 +447,30 @@ class ExperimentAgent(BaseAgent):
 
         return None
 
+    @staticmethod
+    def _find_best_gpu() -> Optional[int]:
+        """Find GPU with most free memory. Returns GPU index or None."""
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=index,memory.free",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                return None
+            best_idx, best_free = None, 0
+            for line in result.stdout.strip().split("\n"):
+                parts = line.strip().split(",")
+                if len(parts) == 2:
+                    idx, free = int(parts[0].strip()), int(parts[1].strip())
+                    if free > best_free:
+                        best_idx, best_free = idx, free
+            if best_free > 1000:  # At least 1GB free
+                return best_idx
+        except Exception:
+            pass
+        return None
+
     def _validate_src_imports(self) -> bool:
         """Validate that src/ modules can be imported without errors.
 
@@ -674,6 +698,12 @@ class ExperimentAgent(BaseAgent):
         env = {}
         if gpu_id is not None:
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        else:
+            # Auto-select GPU with most free memory
+            best_gpu = self._find_best_gpu()
+            if best_gpu is not None:
+                env["CUDA_VISIBLE_DEVICES"] = str(best_gpu)
+                logger.info(f"Auto-selected GPU {best_gpu}")
 
         logger.info(f"Running experiment: {script_path.name}")
 
