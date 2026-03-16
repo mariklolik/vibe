@@ -222,6 +222,10 @@ class WriterAgent(BaseAgent):
                 })
                 self.log_progress(f"Wrote {name}: (raw fallback, ~{len(raw.split()) if raw else 0} words)")
 
+        # Enrich references with real metadata (not just citation keys)
+        unique_citations = list(set(all_citations))
+        enriched_refs = self._enrich_references(unique_citations)
+
         paper = {
             "paper": {
                 "title": self._get_paper_title(),
@@ -230,11 +234,60 @@ class WriterAgent(BaseAgent):
                     "Abstract placeholder.",
                 ),
                 "sections": [s for s in written_sections if s["name"] != "abstract"],
-                "references": [{"key": c, "title": c} for c in set(all_citations)],
+                "references": enriched_refs,
             }
         }
 
         return paper, "\n\n".join(raw_texts)
+
+    def _enrich_references(self, citation_keys: list[str]) -> list[dict]:
+        """Enrich citation keys with real bibliographic metadata via Claude.
+
+        Without this, references are just stubs like {key: "brown2020language", title: "brown2020language"}.
+        This calls Claude to populate authors, title, venue, year for each citation.
+        """
+        if not citation_keys:
+            return []
+
+        # Batch all keys in one call for efficiency
+        keys_text = "\n".join(f"- {k}" for k in citation_keys)
+
+        task = (
+            f"Provide real bibliographic metadata for these citation keys.\n\n"
+            f"Citation keys:\n{keys_text}\n\n"
+            f"For EACH key, provide the REAL paper's: authors, title, venue, year.\n"
+            f"If a key doesn't map to a real paper, provide your best match.\n\n"
+            f"Return a JSON block:\n"
+            f'```json\n{{"references": [\n'
+            f'  {{"key": "brown2020language", "authors": "Tom Brown et al.", '
+            f'"title": "Language Models are Few-Shot Learners", '
+            f'"venue": "NeurIPS", "year": "2020"}}\n'
+            f']}}\n```\n'
+        )
+
+        result, raw = self.call_structured(
+            task=task,
+            max_tokens=4096,
+            temperature=0.2,
+            effort="medium",
+        )
+
+        if result and "references" in result:
+            refs = result["references"]
+            # Validate: each ref must have key, authors, title
+            valid_refs = []
+            for ref in refs:
+                if ref.get("key") and ref.get("title") and ref.get("title") != ref.get("key"):
+                    valid_refs.append(ref)
+                else:
+                    # Fallback: keep as stub
+                    valid_refs.append({"key": ref.get("key", "unknown"), "title": ref.get("key", "unknown")})
+            self.log_progress(f"Enriched {len(valid_refs)}/{len(citation_keys)} references with real metadata")
+            return valid_refs
+
+        # Fallback: return stubs (same as before)
+        logger.warning("Reference enrichment failed, using citation key stubs")
+        return [{"key": k, "title": k} for k in citation_keys]
 
     def check_completeness(self, paper: dict, conference: str = "icml") -> dict:
         """Check if paper meets target metrics (expansion loop trigger)."""

@@ -335,6 +335,34 @@ class Orchestrator:
             "pdf_path": str(pdf_path) if pdf_path else None,
         }
 
+    def _try_generate_figures(self, project_dir: str):
+        """Try to run generate_figures.py if it exists, even after partial experiment success."""
+        import subprocess
+        fig_script = Path(project_dir) / "scripts" / "generate_figures.py"
+        if not fig_script.exists():
+            return
+
+        try:
+            result = subprocess.run(
+                ["python", str(fig_script)],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=project_dir,
+                env={**os.environ},
+            )
+            figures_dir = Path(project_dir) / "figures"
+            fig_count = len(list(figures_dir.glob("*.png"))) + len(list(figures_dir.glob("*.pdf")))
+            if result.returncode == 0 and fig_count > 0:
+                append_progress(project_dir, f"Generated {fig_count} figures", stage="orchestrator")
+                logger.info(f"Figure generation: {fig_count} figures created")
+            else:
+                logger.info(f"Figure generation: script returned {result.returncode}, {fig_count} figures")
+                if result.stderr:
+                    logger.debug(f"Figure generation stderr: {result.stderr[:300]}")
+        except Exception as e:
+            logger.info(f"Figure generation skipped: {e}")
+
     async def run_full_pipeline(
         self,
         topic: str,
@@ -408,6 +436,9 @@ class Orchestrator:
         }
         if not exp_result.get("success"):
             logger.warning("Experiments had issues, continuing to writing with available results")
+
+        # Phase 2.5: Generate figures from whatever results we have
+        self._try_generate_figures(project_dir)
 
         # Phase 3: Paper Writing
         logger.info("=== PHASE 3: WRITING ===")
@@ -527,6 +558,9 @@ class Orchestrator:
                     "elapsed_seconds": round(time.time() - phase_start, 1),
                     "tokens_used": {k: post_tokens[k] - pre_tokens[k] for k in post_tokens},
                 })
+
+                # Re-generate figures after experiment fixes
+                self._try_generate_figures(project_dir)
 
                 # Re-write paper after experiment fixes (new results → new paper)
                 logger.info("=== REVISION: RE-WRITING PAPER AFTER EXPERIMENT FIXES ===")

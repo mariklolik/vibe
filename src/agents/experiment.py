@@ -327,11 +327,30 @@ class ExperimentAgent(BaseAgent):
     def _fix_file_content(content: str, filepath: str) -> str:
         """Fix common content extraction issues."""
         if not filepath.endswith(".py"):
+            # For YAML, just fix literal escapes
+            if filepath.endswith((".yaml", ".yml")):
+                if "\\n" in content and content.count("\n") < 3:
+                    content = content.replace("\\n", "\n").replace("\\t", "\t")
             return content
 
         # Fix 1: If content has literal \n instead of actual newlines
+        # Case A: entirely escaped (no real newlines at all)
         if "\\n" in content and "\n" not in content:
             content = content.replace("\\n", "\n").replace("\\t", "\t")
+        # Case B: mixed — real newlines exist but also literal \\n sequences
+        # (common when JSON content value had escaped newlines that weren't decoded)
+        elif "\\n" in content and "\n" in content:
+            # Check if literal \\n appears inside what looks like string lines
+            # Heuristic: if >20% of "lines" by \\n splitting have code-like content
+            escaped_parts = content.split("\\n")
+            if len(escaped_parts) > len(content.split("\n")) * 2:
+                # More \\n-separated parts than real lines — likely escaped content
+                content = content.replace("\\n", "\n").replace("\\t", "\t")
+                logger.warning(f"Fixed mixed literal \\n escapes in {filepath}")
+
+        # Fix 1b: Double-escaped sequences (\\\\n → \n)
+        if "\\\\n" in content:
+            content = content.replace("\\\\n", "\n").replace("\\\\t", "\t")
 
         # Fix 2: If content starts mid-string (missing opening docstring)
         # Detect: first line doesn't start with valid Python tokens
@@ -507,15 +526,30 @@ class ExperimentAgent(BaseAgent):
         return design, "\n".join(raw_texts)
 
     def save_experiment_scripts(self, design: dict) -> list[Path]:
-        """Save experiment scripts and configs to project directory."""
+        """Save experiment scripts and configs to project directory.
+
+        Applies content fixes and syntax validation (same as save_method_files).
+        """
         saved = []
 
         # Save scripts
         for filepath, content in design.get("scripts", {}).items():
+            # Apply same content fixes as method files
+            content = self._fix_file_content(content, filepath)
+
             full_path = Path(self.project_dir) / filepath
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content)
             saved.append(full_path)
+
+            # Validate Python syntax (same as save_method_files)
+            if filepath.endswith(".py"):
+                error = self._check_python_syntax(full_path)
+                if error:
+                    logger.warning(f"Syntax error in {filepath}: {error}")
+                    self.log_progress(f"WARNING: {filepath} has syntax error: {error}")
+                else:
+                    logger.info(f"Saved script: {filepath} ({len(content)} chars) [syntax OK]")
 
         # Save configs
         for filepath, content in design.get("configs", {}).items():
