@@ -60,6 +60,8 @@ Return ONLY a JSON block with the file content:
 - All hyperparameters should be configurable (not hardcoded)
 - Include type hints and docstrings for public methods
 - Handle GPU/CPU automatically via device detection
+- Default to SMALL models/configs that run on 8GB GPU or CPU
+- Use tiny pre-trained models (gpt2, distilbert, phi-1_5) not large ones (7B+)
 """
 
 # --- System prompt for experiment scripts (scripts/ generation) ---
@@ -144,6 +146,16 @@ You generate scripts that USE src/ and configs/.
 - Match the EXACT class names, function signatures, and return types from src/
 - If a function returns List[SomeClass], iterate with obj.attribute, not obj["key"]
 - If unsure about an API, write defensive code: getattr(obj, 'field', default)
+
+## CRITICAL: GPU Memory Management
+- This system may have LIMITED GPU memory (8-24GB). Design experiments accordingly:
+- Use small models (< 1B params) or mock/synthetic models for initial validation
+- Set small batch sizes (1-4) and short sequences (128-256 tokens) by default
+- Add torch.cuda.empty_cache() between experiments
+- Wrap training in try/except for RuntimeError (CUDA OOM) and report partial results
+- If a pre-trained model is needed, prefer tiny variants (e.g., gpt2, distilbert, phi-1_5)
+- Scripts should check torch.cuda.is_available() and use CPU fallback gracefully
+- Between script runs, GPU memory from previous scripts may not be freed — handle this
 """
 
 
