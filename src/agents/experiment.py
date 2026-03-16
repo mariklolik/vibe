@@ -249,6 +249,8 @@ class ExperimentAgent(BaseAgent):
                 f'```json\n{{"filename": "{filename}", "content": "...", '
                 f'"dependencies": ["torch", "..."], "description": "..."}}\n```\n'
                 f"The content must be complete, executable code — no placeholders.\n"
+                f"IMPORTANT: Return the ACTUAL CODE in the JSON content field. "
+                f"Do NOT return a file path reference or 'See <file>' — return the full code.\n"
             )
 
             result, raw = self.call_structured(
@@ -261,18 +263,28 @@ class ExperimentAgent(BaseAgent):
 
             if result:
                 content = result.get("content", "")
-                if content:
+                if content and self._is_valid_code(content, filename):
                     files[filename] = content
                     generated_files.append((filename, content))
                     for d in result.get("dependencies", []):
                         deps.add(d)
                     logger.info(f"Generated {filename}: {len(content)} chars")
+                elif content:
+                    logger.warning(f"Content for {filename} doesn't look like code ({len(content)} chars): {content[:100]}")
+                    # Try fallback extraction from raw
+                    fb = self._extract_code_fallback(raw, filename)
+                    if fb and self._is_valid_code(fb, filename):
+                        files[filename] = fb
+                        generated_files.append((filename, fb))
+                        logger.info(f"Generated {filename} (fallback after invalid content): {len(fb)} chars")
+                    else:
+                        self.log_progress(f"WARNING: {filename} content is not valid code, skipping")
                 else:
                     logger.warning(f"Empty content for {filename}")
             else:
                 # Fallback: extract code from response
                 content = self._extract_code_fallback(raw, filename)
-                if content:
+                if content and self._is_valid_code(content, filename):
                     files[filename] = content
                     generated_files.append((filename, content))
                     logger.info(f"Generated {filename} (fallback): {len(content)} chars")
@@ -415,6 +427,28 @@ class ExperimentAgent(BaseAgent):
                 content = content[match.start():]
 
         return content
+
+    @staticmethod
+    def _is_valid_code(content: str, filename: str) -> bool:
+        """Check if content looks like actual code (not a hallucinated reference).
+
+        Detects cases where the LLM returns a file path reference like
+        'See /path/to/file.py (57 KB, written in full)' instead of code.
+        """
+        if not content or len(content.strip()) < 20:
+            return False
+        lines = content.strip().split("\n")
+        if filename.endswith(".py"):
+            # Python files should have code keywords
+            code_keywords = ("import ", "from ", "class ", "def ", "return ", "self.", "print(", "if ", "for ")
+            has_code = any(kw in content for kw in code_keywords)
+            # Reject if only 1-2 lines (hallucinated references)
+            if len(lines) < 5 and not has_code:
+                return False
+            return has_code
+        elif filename.endswith((".yaml", ".yml")):
+            return ":" in content
+        return True
 
     @staticmethod
     def _check_python_syntax(filepath: Path) -> Optional[str]:
