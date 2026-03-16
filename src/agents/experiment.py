@@ -324,12 +324,23 @@ class ExperimentAgent(BaseAgent):
             full_path.write_text(content)
             saved.append(full_path)
 
-            # Validate Python syntax
+            # Validate Python syntax, attempt auto-repair if broken
             if filepath.endswith(".py"):
                 error = self._check_python_syntax(full_path)
                 if error:
-                    logger.warning(f"Syntax error in {filepath}: {error}")
-                    self.log_progress(f"WARNING: {filepath} has syntax error: {error}")
+                    repaired = self._try_truncation_repair(content)
+                    if repaired and repaired != content:
+                        full_path.write_text(repaired)
+                        error2 = self._check_python_syntax(full_path)
+                        if not error2:
+                            logger.info(f"Auto-repaired {filepath} by truncating incomplete tail")
+                            self.log_progress(f"Auto-repaired {filepath} (truncated incomplete tail)")
+                        else:
+                            logger.warning(f"Syntax error in {filepath} (repair failed): {error}")
+                            self.log_progress(f"WARNING: {filepath} has syntax error: {error}")
+                    else:
+                        logger.warning(f"Syntax error in {filepath}: {error}")
+                        self.log_progress(f"WARNING: {filepath} has syntax error: {error}")
                 else:
                     logger.info(f"Saved method file: {filepath} ({len(content)} chars) [syntax OK]")
             else:
@@ -410,6 +421,36 @@ class ExperimentAgent(BaseAgent):
             return None
         except py_compile.PyCompileError as e:
             return str(e)
+
+    @staticmethod
+    def _try_truncation_repair(content: str) -> Optional[str]:
+        """Try to fix syntax errors by truncating incomplete code at the end.
+
+        When the LLM response gets cut off at max_tokens, files end with
+        unterminated strings, incomplete functions, etc. This finds the last
+        complete top-level block (class/def at indent 0) and truncates there.
+        """
+        import re
+        lines = content.split("\n")
+        if len(lines) < 10:
+            return None
+
+        # Find the last top-level def/class boundary
+        last_good = None
+        for i in range(len(lines) - 1, 0, -1):
+            line = lines[i]
+            # A top-level def/class starts a new block
+            if re.match(r'^(class |def |@)', line):
+                # The previous line ends the prior complete block
+                last_good = i
+                break
+
+        if last_good and last_good > len(lines) // 2:
+            # Truncate at the last complete block boundary
+            truncated = "\n".join(lines[:last_good]).rstrip() + "\n"
+            return truncated
+
+        return None
 
     @staticmethod
     def _extract_code_fallback(raw: str, filename: str) -> Optional[str]:
@@ -660,12 +701,23 @@ class ExperimentAgent(BaseAgent):
             full_path.write_text(content)
             saved.append(full_path)
 
-            # Validate Python syntax (same as save_method_files)
+            # Validate Python syntax, attempt auto-repair if broken
             if filepath.endswith(".py"):
                 error = self._check_python_syntax(full_path)
                 if error:
-                    logger.warning(f"Syntax error in {filepath}: {error}")
-                    self.log_progress(f"WARNING: {filepath} has syntax error: {error}")
+                    repaired = self._try_truncation_repair(content)
+                    if repaired and repaired != content:
+                        full_path.write_text(repaired)
+                        error2 = self._check_python_syntax(full_path)
+                        if not error2:
+                            logger.info(f"Auto-repaired {filepath} by truncating incomplete tail")
+                            self.log_progress(f"Auto-repaired {filepath} (truncated incomplete tail)")
+                        else:
+                            logger.warning(f"Syntax error in {filepath} (repair failed): {error}")
+                            self.log_progress(f"WARNING: {filepath} has syntax error: {error}")
+                    else:
+                        logger.warning(f"Syntax error in {filepath}: {error}")
+                        self.log_progress(f"WARNING: {filepath} has syntax error: {error}")
                 else:
                     logger.info(f"Saved script: {filepath} ({len(content)} chars) [syntax OK]")
 
