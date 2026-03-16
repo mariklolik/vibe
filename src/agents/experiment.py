@@ -152,6 +152,7 @@ You generate scripts that USE src/ and configs/.
 ## CRITICAL: GPU Memory Management — ONLY 8GB FREE
 - Available GPU memory is approximately 8GB. This is HARD LIMIT.
 - batch_size MUST be 1-2, sequence length MUST be 128-256 tokens
+- Training steps MUST be ≤ 500 (scripts must finish within 30 minutes on CPU)
 - Use small models (< 100M params, ideally < 30M)
 - ALWAYS wrap model creation and training in try/except RuntimeError for CUDA OOM
 - On OOM: halve batch_size and retry, then fallback to CPU if still fails
@@ -796,7 +797,7 @@ class ExperimentAgent(BaseAgent):
     def run_experiment(
         self,
         script_path: Path,
-        timeout_seconds: int = 3600,
+        timeout_seconds: int = 1800,
         gpu_id: Optional[int] = None,
     ) -> dict:
         """Execute an experiment script and capture results.
