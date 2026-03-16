@@ -378,6 +378,20 @@ class WriterAgent(BaseAgent):
                 latex_parts.append(content)
             latex_parts.append("")
 
+        # Include figures if they exist
+        figures_dir = Path(self.project_dir) / "figures"
+        if figures_dir.exists():
+            fig_files = sorted(figures_dir.glob("*.png")) + sorted(figures_dir.glob("*.pdf"))
+            for i, fig_path in enumerate(fig_files[:5], 1):
+                fig_name = fig_path.stem.replace("_", " ").title()
+                latex_parts.append(f"\\begin{{figure}}[htbp]")
+                latex_parts.append(f"\\centering")
+                latex_parts.append(f"\\includegraphics[width=0.8\\textwidth]{{../figures/{fig_path.name}}}")
+                latex_parts.append(f"\\caption{{{fig_name}}}")
+                latex_parts.append(f"\\label{{fig:{fig_path.stem}}}")
+                latex_parts.append(f"\\end{{figure}}")
+                latex_parts.append("")
+
         if references:
             latex_parts.append("\\bibliographystyle{plainnat}")
             latex_parts.append("\\begin{thebibliography}{99}")
@@ -387,6 +401,9 @@ class WriterAgent(BaseAgent):
                 authors = ref.get("authors", "Unknown")
                 year = ref.get("year", "2024")
                 venue = ref.get("venue", "")
+                # Skip stub references where title == key (no metadata)
+                if title == key and authors == "Unknown":
+                    continue
                 latex_parts.append(
                     f"\\bibitem{{{key}}} {authors}. {title}. "
                     f"\\textit{{{venue}}}, {year}."
