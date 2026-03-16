@@ -60,8 +60,10 @@ Return ONLY a JSON block with the file content:
 - All hyperparameters should be configurable (not hardcoded)
 - Include type hints and docstrings for public methods
 - Handle GPU/CPU automatically via device detection
-- Default to SMALL models/configs that run on 8GB GPU or CPU
-- Use tiny pre-trained models (gpt2, distilbert, phi-1_5) not large ones (7B+)
+- Default to TINY models/configs: < 30M params, batch_size=1-2, seq_len=128-256
+- Only 8GB GPU memory available — design for this constraint
+- Avoid loading pre-trained models unless absolutely necessary (they eat memory)
+- Custom small architectures preferred over pre-trained models
 """
 
 # --- System prompt for experiment scripts (scripts/ generation) ---
@@ -147,15 +149,17 @@ You generate scripts that USE src/ and configs/.
 - If a function returns List[SomeClass], iterate with obj.attribute, not obj["key"]
 - If unsure about an API, write defensive code: getattr(obj, 'field', default)
 
-## CRITICAL: GPU Memory Management
-- This system may have LIMITED GPU memory (8-24GB). Design experiments accordingly:
-- Use small models (< 1B params) or mock/synthetic models for initial validation
-- Set small batch sizes (1-4) and short sequences (128-256 tokens) by default
-- Add torch.cuda.empty_cache() between experiments
-- Wrap training in try/except for RuntimeError (CUDA OOM) and report partial results
-- If a pre-trained model is needed, prefer tiny variants (e.g., gpt2, distilbert, phi-1_5)
+## CRITICAL: GPU Memory Management — ONLY 8GB FREE
+- Available GPU memory is approximately 8GB. This is HARD LIMIT.
+- batch_size MUST be 1-2, sequence length MUST be 128-256 tokens
+- Use small models (< 100M params, ideally < 30M)
+- ALWAYS wrap model creation and training in try/except RuntimeError for CUDA OOM
+- On OOM: halve batch_size and retry, then fallback to CPU if still fails
+- Add torch.cuda.empty_cache() between experiments and seeds
+- Avoid loading pre-trained models with large embeddings (gpt2 is 124M — may OOM)
+- For validation/proof-of-concept: use synthetic data + tiny custom models
 - Scripts should check torch.cuda.is_available() and use CPU fallback gracefully
-- Between script runs, GPU memory from previous scripts may not be freed — handle this
+- Do NOT use DataParallel or multi-GPU — only single GPU available
 """
 
 
@@ -600,6 +604,21 @@ class ExperimentAgent(BaseAgent):
                         block = content[pos:pos+500]
                         src_context += f"  - `{f}` dataclass: `{block.split(chr(10)+chr(10))[0].strip()}`\n"
 
+        # Get actual GPU memory for context
+        gpu_info = ""
+        best_gpu = self._find_best_gpu()
+        if best_gpu is not None:
+            try:
+                result = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=index,memory.free",
+                     "--format=csv,noheader,nounits", f"--id={best_gpu}"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                free_mb = result.stdout.strip().split(",")[-1].strip()
+                gpu_info = f"\n## HARDWARE CONSTRAINT\nGPU has only {free_mb}MB free memory. batch_size MUST be 1-2, seq_len 128-256. Use torch.cuda.empty_cache() between seeds.\n"
+            except Exception:
+                pass
+
         idea_context = (
             f"## Research Idea\n"
             f"Title: {idea.get('title')}\n"
@@ -608,6 +627,7 @@ class ExperimentAgent(BaseAgent):
             f"Datasets: {idea.get('datasets')}\n"
             f"Baselines: {idea.get('baselines')}\n"
             f"Target Conference: {idea.get('target_conference')}\n"
+            f"{gpu_info}"
         )
 
         # Step 1: Generate hypotheses first
