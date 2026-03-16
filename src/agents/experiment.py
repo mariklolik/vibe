@@ -137,6 +137,13 @@ You generate scripts that USE src/ and configs/.
 - p < 0.05 is REQUIRED for any claim in the paper
 - Scripts should load configs from configs/ directory
 - Include proper argparse for CLI usage
+
+## CRITICAL: API Accuracy
+- Study the provided src/ code CAREFULLY before writing scripts
+- If src/ returns dataclass objects, use ATTRIBUTE ACCESS (.field), NOT dict access (.get())
+- Match the EXACT class names, function signatures, and return types from src/
+- If a function returns List[SomeClass], iterate with obj.attribute, not obj["key"]
+- If unsure about an API, write defensive code: getattr(obj, 'field', default)
 """
 
 
@@ -432,14 +439,34 @@ class ExperimentAgent(BaseAgent):
         Phase 2: generate scripts/, configs/ that import from src/.
         Generates each script independently for reliability.
         """
-        # Load actual src/ code for context
-        src_context = "## Available Method Modules\n"
+        # Load actual src/ code for context — include FULL API surface
+        # (truncation caused API mismatch bugs: scripts used .get() on dataclass objects)
+        src_context = "## Available Method Modules (FULL CODE — use these exact APIs)\n"
         for f in method_files:
             if f.startswith("src/") and f.endswith(".py"):
                 full_path = Path(self.project_dir) / f
                 if full_path.exists():
                     content = full_path.read_text()
-                    src_context += f"\n### {f}\n```python\n{content[:2000]}\n```\n"
+                    # Include full file for API accuracy (up to 4000 chars)
+                    src_context += f"\n### {f}\n```python\n{content[:4000]}\n```\n"
+
+        # Also extract public API summary for quick reference
+        src_context += "\n## API Quick Reference (classes, functions, signatures)\n"
+        for f in method_files:
+            if f.startswith("src/") and f.endswith(".py"):
+                full_path = Path(self.project_dir) / f
+                if full_path.exists():
+                    content = full_path.read_text()
+                    import re
+                    # Extract class/function definitions with their signatures
+                    for match in re.finditer(r'^(class \w+.*?:|def \w+\(.*?\).*?:)', content, re.MULTILINE):
+                        src_context += f"  - `{f}`: `{match.group(0).strip()}`\n"
+                    # Extract dataclass fields
+                    for match in re.finditer(r'^@dataclass', content, re.MULTILINE):
+                        # Get the class and its fields
+                        pos = match.start()
+                        block = content[pos:pos+500]
+                        src_context += f"  - `{f}` dataclass: `{block.split(chr(10)+chr(10))[0].strip()}`\n"
 
         idea_context = (
             f"## Research Idea\n"
