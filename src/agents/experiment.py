@@ -789,16 +789,34 @@ class ExperimentAgent(BaseAgent):
 
         start_time = time.time()
         try:
+            import os as _os
+            run_env = {**_os.environ, **env}
             result = subprocess.run(
                 ["python", str(script_path)],
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
-                cwd=str(self.project_dir),  # Run from project root so src/ imports work
-                env={**__import__("os").environ, **env},
+                cwd=str(self.project_dir),
+                env=run_env,
             )
 
             elapsed = time.time() - start_time
+
+            # Auto-retry on CUDA OOM with CPU fallback
+            if result.returncode != 0 and "CUDA" in result.stderr and "out of memory" in result.stderr:
+                logger.warning(f"CUDA OOM on {script_path.name}, retrying with CUDA_VISIBLE_DEVICES=''")
+                self.log_progress(f"CUDA OOM on {script_path.name}, retrying on CPU...")
+                cpu_env = {**_os.environ, "CUDA_VISIBLE_DEVICES": ""}
+                start_time = time.time()
+                result = subprocess.run(
+                    ["python", str(script_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                    cwd=str(self.project_dir),
+                    env=cpu_env,
+                )
+                elapsed = time.time() - start_time
 
             stdout_path.write_text(result.stdout)
             stderr_path.write_text(result.stderr)
