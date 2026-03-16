@@ -269,16 +269,18 @@ class ExperimentAgent(BaseAgent):
             return None, "\n".join(raw_texts)
 
         # Generate __init__.py based on what was actually created
+        # IMPORTANT: Use ^class to match only top-level class definitions,
+        # not "class" inside docstrings/comments (which produced false matches
+        # like "from .model import implementing" and "from .model import a")
         init_imports = []
         if "src/model.py" in files:
-            # Extract class names from model.py
             import re
-            classes = re.findall(r'class (\w+)', files["src/model.py"])
+            classes = re.findall(r'^class (\w+)', files["src/model.py"], re.MULTILINE)
             for cls in classes:
                 init_imports.append(f"from .model import {cls}")
         if "src/trainer.py" in files:
             import re
-            classes = re.findall(r'class (\w+)', files["src/trainer.py"])
+            classes = re.findall(r'^class (\w+)', files["src/trainer.py"], re.MULTILINE)
             for cls in classes:
                 init_imports.append(f"from .trainer import {cls}")
         if "src/metrics.py" in files:
@@ -359,6 +361,11 @@ class ExperimentAgent(BaseAgent):
         if "\\\\n" in content:
             content = content.replace("\\\\n", "\n").replace("\\\\t", "\t")
 
+        # Fix 1c: JSON-escaped quotes (\" → ") — from fallback extraction of JSON strings
+        if '\\"' in content:
+            content = content.replace('\\"', '"')
+            logger.warning(f"Fixed JSON-escaped quotes in {filepath}")
+
         # Fix 2: If content starts mid-string (missing opening docstring)
         # Detect: first line doesn't start with valid Python tokens
         first_line = content.split("\n")[0].strip() if "\n" in content else content[:100].strip()
@@ -404,7 +411,11 @@ class ExperimentAgent(BaseAgent):
         # Find ALL code blocks of the expected type, take the largest
         matches = re.findall(lang_pattern, raw, re.DOTALL)
         if matches:
-            return max(matches, key=len)
+            code = max(matches, key=len)
+            # Unescape JSON artifacts if present
+            if '\\"' in code:
+                code = code.replace('\\"', '"')
+            return code
 
         # Fallback: any code block
         matches = re.findall(r'```\w*\s*\n(.*?)\n```', raw, re.DOTALL)
@@ -423,6 +434,42 @@ class ExperimentAgent(BaseAgent):
                     return raw[idx:].rstrip()
 
         return None
+
+    def _validate_src_imports(self) -> bool:
+        """Validate that src/ modules can be imported without errors.
+
+        Catches import-time failures (missing deps, name errors) before
+        running experiments, providing clearer error messages.
+        """
+        src_dir = self.src_dir
+        if not src_dir.exists():
+            return False
+
+        all_ok = True
+        for py_file in sorted(src_dir.glob("*.py")):
+            if py_file.name == "__init__.py":
+                continue
+            module_name = py_file.stem
+            try:
+                result = subprocess.run(
+                    ["python", "-c", f"import sys; sys.path.insert(0, '.'); from src import {module_name}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=str(self.project_dir),
+                )
+                if result.returncode != 0:
+                    error_msg = result.stderr.strip().split("\n")[-1] if result.stderr else "unknown"
+                    logger.warning(f"Import validation failed for src.{module_name}: {error_msg}")
+                    self.log_progress(f"WARNING: src.{module_name} import failed: {error_msg}")
+                    all_ok = False
+                else:
+                    logger.info(f"Import validation OK: src.{module_name}")
+            except Exception as e:
+                logger.warning(f"Import validation error for src.{module_name}: {e}")
+                all_ok = False
+
+        return all_ok
 
     # Experiment scripts to generate (per-file calls)
     EXPERIMENT_SCRIPTS = [
@@ -813,6 +860,11 @@ class ExperimentAgent(BaseAgent):
 
         scripts = self.save_experiment_scripts(design)
         self.log_progress(f"Designed {len(scripts)} experiment scripts + configs")
+
+        # Step 2.5: Validate src/ modules can be imported
+        import_ok = self._validate_src_imports()
+        if not import_ok:
+            self.log_progress("WARNING: src/ import validation failed — experiments may crash")
 
         # Step 3: Execute experiments in order
         run_order = design.get("run_order", [str(s.relative_to(self.project_dir)) for s in scripts])
