@@ -1,6 +1,9 @@
 # Core MCP
 mcp>=1.0.0
 
+# Anthropic SDK (for agent pipeline)
+anthropic>=0.40.0
+
 # HTTP clients
 httpx>=0.27.0
 aiohttp>=3.9.0
