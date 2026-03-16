@@ -288,15 +288,31 @@ class ExperimentAgent(BaseAgent):
         return method_design, "\n".join(raw_texts)
 
     def save_method_files(self, method_design: dict) -> list[Path]:
-        """Save method implementation files to project directory."""
+        """Save method implementation files to project directory.
+
+        Validates Python files for syntax errors after saving.
+        """
         saved = []
         files = method_design.get("files", {})
         for filepath, content in files.items():
+            # Fix common content issues before saving
+            content = self._fix_file_content(content, filepath)
+
             full_path = Path(self.project_dir) / filepath
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content)
             saved.append(full_path)
-            logger.info(f"Saved method file: {filepath} ({len(content)} chars)")
+
+            # Validate Python syntax
+            if filepath.endswith(".py"):
+                error = self._check_python_syntax(full_path)
+                if error:
+                    logger.warning(f"Syntax error in {filepath}: {error}")
+                    self.log_progress(f"WARNING: {filepath} has syntax error: {error}")
+                else:
+                    logger.info(f"Saved method file: {filepath} ({len(content)} chars) [syntax OK]")
+            else:
+                logger.info(f"Saved method file: {filepath} ({len(content)} chars)")
 
         # Save dependencies
         deps = method_design.get("dependencies", [])
@@ -306,6 +322,41 @@ class ExperimentAgent(BaseAgent):
             saved.append(req_path)
 
         return saved
+
+    @staticmethod
+    def _fix_file_content(content: str, filepath: str) -> str:
+        """Fix common content extraction issues."""
+        if not filepath.endswith(".py"):
+            return content
+
+        # Fix 1: If content has literal \n instead of actual newlines
+        if "\\n" in content and "\n" not in content:
+            content = content.replace("\\n", "\n").replace("\\t", "\t")
+
+        # Fix 2: If content starts mid-string (missing opening docstring)
+        # Detect: first line doesn't start with valid Python tokens
+        first_line = content.split("\n")[0].strip() if "\n" in content else content[:100].strip()
+        valid_starts = ("import ", "from ", "class ", "def ", "#", '"""', "'''",
+                        "__", "if ", "try:", "import", "@", "#!/")
+        if first_line and not any(first_line.startswith(s) for s in valid_starts):
+            # Try to find where real code starts
+            import re
+            match = re.search(r'^(from __future__|import |from |class |def |#|""")', content, re.MULTILINE)
+            if match:
+                logger.warning(f"Trimming {len(content[:match.start()])} chars of preamble from {filepath}")
+                content = content[match.start():]
+
+        return content
+
+    @staticmethod
+    def _check_python_syntax(filepath: Path) -> Optional[str]:
+        """Check if a Python file has valid syntax. Returns error msg or None."""
+        import py_compile
+        try:
+            py_compile.compile(str(filepath), doraise=True)
+            return None
+        except py_compile.PyCompileError as e:
+            return str(e)
 
     @staticmethod
     def _extract_code_fallback(raw: str, filename: str) -> Optional[str]:
