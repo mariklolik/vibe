@@ -2,6 +2,48 @@
 
 End-to-end AI research pipeline MCP server for Cursor. Enables vibe-coding style research workflow from idea generation to paper publication.
 
+---
+
+## Problem Statement
+
+Modern ML researchers face a painful coordination overhead: they context-switch between a dozen tools — arXiv browsers, experiment trackers, LaTeX editors, statistical libraries, GitHub — while trying to stay in the creative flow of actual research. A PhD student or industry researcher spends a disproportionate share of their time on plumbing: finding related work, scaffolding experiments, verifying results are statistically sound before writing them up, and wrestling with conference-specific LaTeX templates. This overhead is especially brutal during the crunch before a submission deadline, when every hour spent on tooling is an hour not spent on ideas.
+
+The deeper problem is that current AI coding assistants (Cursor, Copilot, and similar) are excellent at writing code in isolation, but have no understanding of the *research process*. They can generate a training loop, but they don't know that every claim in a paper needs a p-value, that figures are mandatory, or that the paper will be rejected if it falls two pages short of the venue target. Researchers end up babysitting the AI through each micro-step rather than delegating whole workflow stages.
+
+ResearchMCP is built for the solo researcher or small lab team who already uses Cursor and wants their AI assistant to be a genuine research collaborator — one that knows the workflow, enforces scientific rigour, and handles the boilerplate so the researcher can focus on the insight that actually matters.
+
+---
+
+## PoC Demo Scope
+
+The following sequence demonstrates the core value of ResearchMCP end-to-end in a single session:
+
+1. **Create project and discover related work** — Run `create_project()` and `fetch_hf_trending_with_metrics(topic="linear attention")`. The agent returns five trending papers with citation counts and sets target metrics (word count, figure count) automatically via `set_target_metrics_from_papers()`.
+
+2. **Generate and approve a research idea** — Call `generate_ideas()` to receive three ranked ideas with novelty scores. The agent is hard-blocked from proceeding. The user types `APPROVE idea_abc123 CODE 7382` to unlock the workflow.
+
+3. **Run a baseline experiment with tracking** — `create_experiment_env()` → `install_dependencies()` → `run_experiment(script="train.py")`. All metrics are logged to SQLite automatically.
+
+4. **Verify results statistically** — Call `verify_and_record_hypothesis()` with the experiment outputs. The tool returns p-value and effect size and flags whether the claim can appear in the paper.
+
+5. **Generate figures and write a draft** — `plot_comparison_bar()` and `plot_training_curves()` produce publication-ready figures. `get_paper_context_for_writing()` extracts style from the reference papers. The agent writes a draft in the same academic register.
+
+6. **Check completeness and trigger expansion** — `check_and_expand_paper()` compares the draft against target metrics and, if short, prescribes specific ablation experiments with estimated word and figure yields.
+
+7. **Format for a conference and compile** — `cast_to_format(conference="neurips")` applies the correct template; `compile_paper()` produces a PDF. `create_github_repo()` publishes the code and links it in the paper automatically.
+
+---
+
+## Out of Scope
+
+- **Multi-user collaboration** — The current architecture assumes a single researcher per project. Concurrent edits, shared approval flows, and role-based access control are not supported.
+- **Proprietary or closed-source datasets** — ResearchMCP can set up publicly available benchmark datasets. Integration with internal data warehouses, licensed corpora, or datasets behind authentication is out of scope.
+- **Long-running GPU cluster jobs** — Experiment execution assumes a local or single-node environment. Distributed training across multiple machines, SLURM job scheduling, and cloud-provider-specific GPU orchestration (AWS SageMaker, GCP Vertex AI) are not handled.
+- **Automated peer review or rebuttal generation** — The pipeline ends at a compiled, submission-ready PDF. Post-submission tasks such as responding to reviewer comments, revising a camera-ready version, or generating a rebuttal document are not part of the workflow.
+- **Non-computer-science venues** — Conference templates and submission norms are calibrated to CS/ML venues (NeurIPS, ICML, ACL, CVPR, and similar). Journals, medical conferences (MICCAI, NeurIPS workshops with different requirements), and humanities or social science publication formats are not currently supported.
+
+---
+
 ## Quick Start (Local)
 
 ```bash
